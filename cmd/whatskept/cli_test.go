@@ -257,6 +257,25 @@ func TestCLIEnrichConcurrency(t *testing.T) {
 	}
 }
 
+// --help on a subcommand prints its flags (with real defaults) and
+// exits 0 — agents discover flags this way.
+func TestCLISubcommandHelp(t *testing.T) {
+	code, _, stderr := run(t, t.TempDir(), "enrich", "--help")
+	if code != 0 {
+		t.Errorf("enrich --help: exit %d, want 0", code)
+	}
+	if !strings.Contains(stderr, "concurrency") || !strings.Contains(stderr, "48") {
+		t.Errorf("enrich --help must show the flag and its default: %q", stderr)
+	}
+	code, _, stderr = run(t, t.TempDir(), "mcp", "--help")
+	if code != 0 {
+		t.Errorf("mcp --help: exit %d, want 0", code)
+	}
+	if !strings.Contains(stderr, "database") {
+		t.Errorf("mcp --help must show --database: %q", stderr)
+	}
+}
+
 func TestCLIMCPRequiresDatabase(t *testing.T) {
 	code, _, stderr := run(t, t.TempDir(), "mcp")
 	if code != 1 {

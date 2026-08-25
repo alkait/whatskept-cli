@@ -21,6 +21,9 @@ func runMCP(args []string) error {
 	database := fs.String("database", "", "path to the database file (required), e.g. <workspace>/ChatStorage.sqlite")
 	addr := fs.String("addr", "127.0.0.1:8787", "listen address")
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 	if *database == "" {

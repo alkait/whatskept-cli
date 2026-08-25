@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -19,12 +20,15 @@ import (
 // should see.
 func runEnrich(args []string) error {
 	fs := flag.NewFlagSet("enrich", flag.ContinueOnError)
-	concurrency := fs.Int("concurrency", 0,
-		"in-flight OpenRouter requests (0 = built-in default; lower it when the API pushes back)")
+	concurrency := fs.Int("concurrency", enrich.DefaultConcurrency,
+		"in-flight OpenRouter requests (lower it when the API pushes back)")
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
-	if *concurrency < 0 {
+	if *concurrency <= 0 {
 		return fmt.Errorf("--concurrency must be positive, got %d", *concurrency)
 	}
 	root, err := workspace.Find()

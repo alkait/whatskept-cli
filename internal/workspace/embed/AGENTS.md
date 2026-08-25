@@ -128,6 +128,10 @@ proceed. Then run:
 OPENROUTER_API_KEY=<key> whatskept enrich
 ```
 
+`--concurrency n` overrides the in-flight request cap (default 48).
+Lower it if the log shows sustained rate-limit pushback; raising it
+rarely helps beyond the provider's limits.
+
 AFTER each run, fetch the balance again and report the difference —
 that is the run's estimated credit spend.
 

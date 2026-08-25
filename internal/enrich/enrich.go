@@ -16,13 +16,6 @@ import (
 )
 
 const (
-	// defaultConcurrency is the in-flight OpenRouter request cap. The
-	// original repo defaulted to a conservative 8; we run much hotter
-	// because the error taxonomy absorbs pushback safely (429s retry
-	// with Retry-After-aware backoff, and sustained failure trips the
-	// circuit breaker). --concurrency overrides in either direction.
-	defaultConcurrency = 48
-
 	// breakerThreshold aborts the run after this many CONSECUTIVE items
 	// exhaust their transient retries — that pattern is an outage, not
 	// bad files, and churning the rest of the queue would waste hours.
@@ -30,6 +23,13 @@ const (
 
 	progressEvery = 25
 )
+
+// DefaultConcurrency is the in-flight OpenRouter request cap. The
+// original repo defaulted to a conservative 8; we run much hotter
+// because the error taxonomy absorbs pushback safely (429s retry with
+// Retry-After-aware backoff, and sustained failure trips the circuit
+// breaker). --concurrency overrides in either direction.
+const DefaultConcurrency = 48
 
 // FailedDir is where permanently-failing files are quarantined,
 // relative to the .unenriched/ queue directory. One permanent failure
@@ -102,7 +102,7 @@ func (s Stats) Drained() bool {
 type Options struct {
 	Root        string // workspace root: <Root>/ChatStorage.sqlite, <Root>/.unenriched/
 	Client      *Client
-	Concurrency int          // in-flight requests; 0 = defaultConcurrency
+	Concurrency int          // in-flight requests; 0 = DefaultConcurrency
 	Log         func(string) // progress lines; nil = silent
 	// RebuildFTS is called once at the end when anything was enriched
 	// (the caller wires views.Apply; injected to keep packages
@@ -200,7 +200,7 @@ func Run(ctx context.Context, opts Options) (Stats, error) {
 
 	concurrency := opts.Concurrency
 	if concurrency <= 0 {
-		concurrency = defaultConcurrency
+		concurrency = DefaultConcurrency
 	}
 
 	runCtx, cancel := context.WithCancel(ctx)
