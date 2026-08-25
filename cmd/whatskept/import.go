@@ -34,7 +34,11 @@ func runImport(backupPath string) error {
 		return fmt.Errorf("backup is from device %s but this workspace is bound to device %s", udid, s.UDID)
 	}
 
-	number, err := backup.DetectNumber(backupPath)
+	b, err := backup.Open(backupPath)
+	if err != nil {
+		return err
+	}
+	number, err := b.DetectNumber()
 	if err != nil {
 		return err
 	}
@@ -53,6 +57,12 @@ func runImport(backupPath string) error {
 		return fmt.Errorf("backup belongs to WhatsApp number %s but this workspace is bound to %s", number, s.WhatsAppNumber)
 	}
 
-	fmt.Println("validation passed; importing messages is not implemented yet")
+	n, err := b.ExtractChatStorage(root)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("extracted %s (%d bytes)\n", backup.ChatStorageName, n)
+
+	fmt.Println("importing messages is not implemented yet")
 	return nil
 }

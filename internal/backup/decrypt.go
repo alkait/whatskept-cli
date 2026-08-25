@@ -25,42 +25,6 @@ var whatsappPrefsPlists = []struct{ domain, relPath string }{
 	{"AppDomain-net.whatsapp.WhatsApp", "Library/Preferences/net.whatsapp.WhatsApp.plist"},
 }
 
-// DetectNumber unlocks the encrypted backup at dir and reads the
-// account's own number from WhatsApp's preference plists. Returns
-// ("", nil) when the backup unlocked fine but no number was found.
-// A package var so tests can stub the decryption step.
-var DetectNumber = func(dir string) (string, error) {
-	manifest, err := readPlist(filepath.Join(dir, "Manifest.plist"))
-	if err != nil {
-		return "", err
-	}
-	if manifest == nil {
-		return "", fmt.Errorf("%s is not an iOS backup (no readable Manifest.plist)", dir)
-	}
-	if enc, _ := manifest["IsEncrypted"].(bool); !enc {
-		return "", errors.New("backup is not encrypted; WhatsApp data is only present in encrypted backups")
-	}
-	password := os.Getenv(PasswordEnv)
-	if password == "" {
-		return "", fmt.Errorf("backup is encrypted; set %s to your backup password", PasswordEnv)
-	}
-
-	mb, err := openBackup(dir, password)
-	if err != nil {
-		return "", err
-	}
-	for _, loc := range whatsappPrefsPlists {
-		data, err := readBackupFile(mb, loc.domain, loc.relPath)
-		if err != nil {
-			continue
-		}
-		if n := numberFromPrefs(data); n != "" {
-			return n, nil
-		}
-	}
-	return "", nil
-}
-
 // silenceStdout redirects the process's stdout to /dev/null while fn
 // runs. The upstream backup library prints debug lines straight to
 // stdout — including a derived key that is a password-equivalent for

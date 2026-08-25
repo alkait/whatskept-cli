@@ -70,11 +70,25 @@ func writeListBackup(t *testing.T, root, name, deviceName, date string, encrypte
 	}
 }
 
-func stubNumber(t *testing.T, number string) {
+// fakeBundle stands in for a real decrypted backup: a fixed account
+// number, and ExtractChatStorage writes a marker file.
+type fakeBundle struct{ number string }
+
+func (f *fakeBundle) DetectNumber() (string, error) { return f.number, nil }
+
+func (f *fakeBundle) ExtractChatStorage(root string) (int64, error) {
+	data := []byte("fake chatstorage")
+	if err := os.WriteFile(filepath.Join(root, backup.ChatStorageName), data, 0o644); err != nil {
+		return 0, err
+	}
+	return int64(len(data)), nil
+}
+
+func stubOpen(t *testing.T, number string) {
 	t.Helper()
-	orig := backup.DetectNumber
-	t.Cleanup(func() { backup.DetectNumber = orig })
-	backup.DetectNumber = func(dir string) (string, error) { return number, nil }
+	orig := backup.Open
+	t.Cleanup(func() { backup.Open = orig })
+	backup.Open = func(dir string) (backup.Bundle, error) { return &fakeBundle{number: number}, nil }
 }
 
 func chdir(t *testing.T, dir string) {
@@ -102,7 +116,7 @@ func TestImportBindsUnboundWorkspace(t *testing.T) {
 	ws := initedWorkspace(t)
 	b := writeImportBackup(t, t.TempDir(), fakeUDID)
 	chdir(t, ws)
-	stubNumber(t, fakeNumber)
+	stubOpen(t, fakeNumber)
 
 	before, _ := workspace.Load(ws)
 	if err := runImport(b); err != nil {
@@ -118,13 +132,16 @@ func TestImportBindsUnboundWorkspace(t *testing.T) {
 	if !after.CreatedAt.Equal(before.CreatedAt) {
 		t.Error("import changed created_at")
 	}
+	if _, err := os.Stat(filepath.Join(ws, backup.ChatStorageName)); err != nil {
+		t.Errorf("import did not extract ChatStorage.sqlite: %v", err)
+	}
 }
 
 func TestImportSameDeviceAgain(t *testing.T) {
 	ws := initedWorkspace(t)
 	b := writeImportBackup(t, t.TempDir(), fakeUDID)
 	chdir(t, ws)
-	stubNumber(t, fakeNumber)
+	stubOpen(t, fakeNumber)
 	if err := runImport(b); err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +154,7 @@ func TestImportNumberUndetected(t *testing.T) {
 	ws := initedWorkspace(t)
 	b := writeImportBackup(t, t.TempDir(), fakeUDID)
 	chdir(t, ws)
-	stubNumber(t, "")
+	stubOpen(t, "")
 	if err := runImport(b); err != nil {
 		t.Fatalf("undetected number must not fail the import: %v", err)
 	}
@@ -154,12 +171,12 @@ func TestImportRefusesDifferentNumber(t *testing.T) {
 	ws := initedWorkspace(t)
 	b := writeImportBackup(t, t.TempDir(), fakeUDID)
 	chdir(t, ws)
-	stubNumber(t, fakeNumber)
+	stubOpen(t, fakeNumber)
 	if err := runImport(b); err != nil {
 		t.Fatal(err)
 	}
 
-	stubNumber(t, "+19998887777")
+	stubOpen(t, "+19998887777")
 	err := runImport(b)
 	if err == nil {
 		t.Fatal("expected refusal for different WhatsApp number")
@@ -176,7 +193,7 @@ func TestImportRefusesDifferentNumber(t *testing.T) {
 func TestImportRefusesDifferentDevice(t *testing.T) {
 	ws := initedWorkspace(t)
 	chdir(t, ws)
-	stubNumber(t, fakeNumber)
+	stubOpen(t, fakeNumber)
 	if err := runImport(writeImportBackup(t, t.TempDir(), fakeUDID)); err != nil {
 		t.Fatal(err)
 	}
