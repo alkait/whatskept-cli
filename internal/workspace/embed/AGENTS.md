@@ -111,11 +111,27 @@ Look at `settings.json` and the files, then pick the path:
 
 Enrichment sends the queued media through OpenRouter (paid API) and
 indexes the resulting text. Ask the user for their OpenRouter API key
-first — inline env var, never stored, never echoed:
+first — inline env var, never stored, never echoed.
+
+Once you have the key, fetch the credit balance and report it to the
+user BEFORE starting:
+
+```
+curl -s https://openrouter.ai/api/v1/credits -H "Authorization: Bearer $OPENROUTER_API_KEY"
+```
+
+The remaining balance is `total_credits - total_usage` (USD). Tell the
+user the balance and the queue size so they can decide whether to
+proceed. Then run:
 
 ```
 OPENROUTER_API_KEY=<key> whatskept enrich
 ```
+
+AFTER each run, fetch the balance again and report the difference —
+that is the run's estimated credit spend. Include it alongside the
+run's enriched/failed/remaining counts so the user can gauge cost per
+file and project what draining the rest of the queue will cost.
 
 It is fully resumable: interrupt or re-run any time, it continues where
 it left off. Exit 0 means the queue fully drained. A non-zero exit with
