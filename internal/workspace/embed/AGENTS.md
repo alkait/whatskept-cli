@@ -129,9 +129,27 @@ OPENROUTER_API_KEY=<key> whatskept enrich
 ```
 
 AFTER each run, fetch the balance again and report the difference —
-that is the run's estimated credit spend. Include it alongside the
-run's enriched/failed/remaining counts so the user can gauge cost per
-file and project what draining the rest of the queue will cost.
+that is the run's estimated credit spend.
+
+**Project cost and time to finish.** From any completed (or safely
+interrupted) run you have everything needed:
+
+- cost per file  = balance delta ÷ files enriched this run
+- rate           = files enriched ÷ run duration (the `run start` and
+                   `run done` timestamps in `enrich.log`, or the
+                   per-line timestamps for a partial run)
+- remaining      = files still in the queue directories
+
+Report: estimated credit to finish = remaining × cost per file, and
+estimated time = remaining ÷ rate. Costs differ by kind (voice notes
+and PDFs cost more than images), so when the mix allows, compute per
+kind from the log's per-kind lines and sum.
+
+On a first-ever run with a big queue, offer the user a measured sample
+first: start `whatskept enrich`, let it process a few hundred files,
+interrupt it (Ctrl-C is safe — everything committed stays, the run
+resumes later), then present balance spent, rate, and the projections
+above before continuing with the full queue.
 
 It is fully resumable: interrupt or re-run any time, it continues where
 it left off. Exit 0 means the queue fully drained. A non-zero exit with
