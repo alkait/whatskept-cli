@@ -204,20 +204,18 @@ func TestCLIImportUnencryptedBackup(t *testing.T) {
 	}
 }
 
-func TestCLIMCPOutsideWorkspace(t *testing.T) {
+func TestCLIMCPRequiresDatabase(t *testing.T) {
 	code, _, stderr := run(t, t.TempDir(), "mcp")
 	if code != 1 {
 		t.Errorf("exit %d, want 1", code)
 	}
-	if !strings.Contains(stderr, "not a whatskept workspace") {
-		t.Errorf("stderr = %q", stderr)
+	if !strings.Contains(stderr, "--database") {
+		t.Errorf("stderr = %q, want mention of --database", stderr)
 	}
 }
 
 func TestCLIMCPRequiresToken(t *testing.T) {
-	ws := t.TempDir()
-	run(t, ws, "init")
-	code, _, stderr := run(t, ws, "mcp")
+	code, _, stderr := run(t, t.TempDir(), "mcp", "--database", "ChatStorage.sqlite")
 	if code != 1 {
 		t.Errorf("exit %d, want 1", code)
 	}

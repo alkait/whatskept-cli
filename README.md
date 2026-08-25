@@ -39,10 +39,10 @@ extraction, views + FTS):
 WHATSKEPT_BACKUP_PASSWORD=... ./whatskept import <ios-backup-path>
 ```
 
-Serve the workspace DB over MCP (endpoint: `http://<addr>/<token>/mcp`):
+Serve a database file over MCP (endpoint: `http://<addr>/<token>/mcp`):
 
 ```
-WHATSKEPT_MCP_TOKEN=... ./whatskept mcp [--addr host:port]
+WHATSKEPT_MCP_TOKEN=... ./whatskept mcp --database <workspace>/ChatStorage.sqlite [--addr host:port]
 ```
 
 Run all tests:

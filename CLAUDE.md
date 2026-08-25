@@ -6,11 +6,12 @@ whatskept-live. No GUI. No backup/restore features. No deployment concerns.
 ## Shape
 
 Everything lives in a workspace — a directory marked by a `.whatskept/`
-directory, created with `whatskept init [dir]`. No other command works
-outside one. `.whatskept/` contains only `settings.json`: portable
-configuration, including the device/account binding. All other state
-(the shared SQLite database, etc.) sits at the workspace root. Secrets
-come from `.env` or the environment, never from settings:
+directory, created with `whatskept init [dir]`. Every command works
+inside one, except `mcp`, which addresses the database file explicitly.
+`.whatskept/` contains only `settings.json`: portable configuration,
+including the device/account binding. All other state (the shared
+SQLite database, etc.) sits at the workspace root. Secrets come from
+`.env` or the environment, never from settings:
 
 - `whatskept import <ios-backup-path>` — seed history from an iOS backup,
   enrich everything, resumable. First import binds the workspace to that
@@ -18,7 +19,8 @@ come from `.env` or the environment, never from settings:
   refused thereafter.
 - `whatskept live` — capture new messages as they arrive, enriched through
   the same pipeline.
-- `whatskept mcp` — the only query surface; serves the unified DB.
+- `whatskept mcp --database <file>` — the only query surface; serves the
+  unified DB over HTTP at a token-in-path endpoint.
 
 Enrichment (image descriptions/OCR, voice transcripts, PDF text) runs via
 OpenRouter on both import and live paths. Media, PDFs and voice files are

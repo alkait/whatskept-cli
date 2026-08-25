@@ -14,7 +14,7 @@ Usage:
   whatskept init [dir]               initialize a workspace (default: current directory)
   whatskept import <ios-backup-path> import history from an iOS backup
   whatskept import --list            list iOS backups on this machine
-  whatskept mcp [--addr host:port]   serve the workspace database over MCP (HTTP)
+  whatskept mcp --database <file>    serve a database file over MCP (HTTP) [--addr host:port]
   whatskept -h | --help              show this help
 `
 
