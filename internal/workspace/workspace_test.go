@@ -63,14 +63,19 @@ func TestInitIsIdempotent(t *testing.T) {
 func TestInitWritesAgentGuides(t *testing.T) {
 	dir := t.TempDir()
 	mustInit(t, dir)
-	for _, name := range []string{"CLAUDE.md", "AGENTS.md"} {
-		data, err := os.ReadFile(filepath.Join(dir, name))
-		if err != nil {
-			t.Fatalf("%s missing: %v", name, err)
-		}
-		if !strings.Contains(string(data), "whatskept workspace") {
-			t.Errorf("%s does not look like the operator guide", name)
-		}
+	agents, err := os.ReadFile(filepath.Join(dir, "AGENTS.md"))
+	if err != nil {
+		t.Fatalf("AGENTS.md missing: %v", err)
+	}
+	if !strings.Contains(string(agents), "whatskept workspace") {
+		t.Error("AGENTS.md does not look like the operator guide")
+	}
+	claude, err := os.ReadFile(filepath.Join(dir, "CLAUDE.md"))
+	if err != nil {
+		t.Fatalf("CLAUDE.md missing: %v", err)
+	}
+	if string(claude) != "@AGENTS.md\n" {
+		t.Errorf("CLAUDE.md = %q, want the @AGENTS.md stub", claude)
 	}
 }
 

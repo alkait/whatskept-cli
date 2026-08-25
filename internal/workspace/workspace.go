@@ -15,11 +15,15 @@ import (
 const markerDir = ".whatskept"
 
 // agentGuide is the operator guide dropped into every workspace as
-// CLAUDE.md and AGENTS.md. Rewritten on every init so an upgraded
-// binary refreshes the guidance.
+// AGENTS.md — the single source of truth; CLAUDE.md is a one-line stub
+// importing it via Claude Code's @-syntax, so the two can never
+// diverge. Both are rewritten on every init so an upgraded binary
+// refreshes the guidance.
 //
 //go:embed embed/AGENTS.md
 var agentGuide []byte
+
+const claudeStub = "@AGENTS.md\n"
 
 // Settings is the portable configuration stored in settings.json.
 type Settings struct {
@@ -85,10 +89,11 @@ func Init(dir string) (already bool, err error) {
 			return false, err
 		}
 	}
-	for _, name := range []string{"CLAUDE.md", "AGENTS.md"} {
-		if err := os.WriteFile(filepath.Join(dir, name), agentGuide, 0o644); err != nil {
-			return already, err
-		}
+	if err := os.WriteFile(filepath.Join(dir, "AGENTS.md"), agentGuide, 0o644); err != nil {
+		return already, err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte(claudeStub), 0o644); err != nil {
+		return already, err
 	}
 	return already, nil
 }
