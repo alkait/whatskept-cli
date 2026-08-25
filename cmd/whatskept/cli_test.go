@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"whatskept/internal/backup"
+	"whatskept/internal/enrich"
 	"whatskept/internal/mcpserve"
 )
 
@@ -42,9 +43,10 @@ func run(t *testing.T, dir string, args ...string) (int, string, string) {
 	t.Helper()
 	cmd := exec.Command(binPath, args...)
 	cmd.Dir = dir
-	// Tests must not inherit a real backup password or MCP token from
-	// the developer's environment; an empty value counts as unset.
-	cmd.Env = append(os.Environ(), backup.PasswordEnv+"=", mcpserve.TokenEnv+"=")
+	// Tests must not inherit a real backup password, MCP token, or API
+	// key from the developer's environment; empty counts as unset.
+	cmd.Env = append(os.Environ(),
+		backup.PasswordEnv+"=", mcpserve.TokenEnv+"=", enrich.APIKeyEnv+"=")
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -206,6 +208,28 @@ func TestCLIImportUnencryptedBackup(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "not encrypted") {
 		t.Errorf("stderr = %q", stderr)
+	}
+}
+
+func TestCLIEnrichOutsideWorkspace(t *testing.T) {
+	code, _, stderr := run(t, t.TempDir(), "enrich")
+	if code != 1 {
+		t.Errorf("exit %d, want 1", code)
+	}
+	if !strings.Contains(stderr, "not a whatskept workspace") {
+		t.Errorf("stderr = %q", stderr)
+	}
+}
+
+func TestCLIEnrichNoDatabase(t *testing.T) {
+	ws := t.TempDir()
+	run(t, ws, "init")
+	code, _, stderr := run(t, ws, "enrich")
+	if code != 1 {
+		t.Errorf("exit %d, want 1", code)
+	}
+	if !strings.Contains(stderr, "whatskept import") {
+		t.Errorf("stderr = %q, want import hint", stderr)
 	}
 }
 

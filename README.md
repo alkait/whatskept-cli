@@ -39,6 +39,12 @@ extraction, views + FTS):
 WHATSKEPT_BACKUP_PASSWORD=... ./whatskept import <ios-backup-path>
 ```
 
+Enrich queued media into searchable text (images/voice/PDFs, resumable):
+
+```
+OPENROUTER_API_KEY=... ./whatskept enrich
+```
+
 Serve a database file over MCP (endpoint: `http://<addr>/<token>/mcp`):
 
 ```

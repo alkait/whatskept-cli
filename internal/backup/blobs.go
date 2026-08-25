@@ -73,15 +73,25 @@ func (b *bundle) ExtractBlobs(root string, log func(string)) (BlobStats, error) 
 	}
 	defer db.Close()
 
-	images, err := selectBlobCandidates(db, "m.ZMEDIALOCALPATH LIKE '%.jpg'")
+	// Rows already enriched (their text carried forward from the
+	// previous live DB) are excluded — re-queueing them would re-pay
+	// for enrichment the workspace already has.
+	selectPending := func(kind, where string) ([]blobCandidate, error) {
+		excl, err := enrichedExclusion(db, kind)
+		if err != nil {
+			return nil, err
+		}
+		return selectBlobCandidates(db, where+excl)
+	}
+	images, err := selectPending("images", "m.ZMEDIALOCALPATH LIKE '%.jpg'")
 	if err != nil {
 		return stats, err
 	}
-	voice, err := selectBlobCandidates(db, "m.ZMEDIALOCALPATH LIKE '%.opus'")
+	voice, err := selectPending("voice", "m.ZMEDIALOCALPATH LIKE '%.opus'")
 	if err != nil {
 		return stats, err
 	}
-	docs, err := selectBlobCandidates(db, "wm.ZMESSAGETYPE = 8 AND m.ZMEDIALOCALPATH IS NOT NULL")
+	docs, err := selectPending("documents", "wm.ZMESSAGETYPE = 8 AND m.ZMEDIALOCALPATH IS NOT NULL")
 	if err != nil {
 		return stats, err
 	}

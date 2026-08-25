@@ -104,6 +104,17 @@ func (b *bundle) ExtractChatStorage(root string) (int64, error) {
 		_ = os.Remove(tempPath)
 		return 0, errors.New("extraction produced an empty ChatStorage.sqlite")
 	}
+	// Re-import: enrichment rows in the current live DB are paid-for
+	// work the backup can never contain — carry them into the staging
+	// DB before it replaces the live one. A merge failure aborts the
+	// import (removing the staging file) rather than silently wiping
+	// the rows.
+	if _, statErr := os.Stat(livePath); statErr == nil {
+		if err := mergeForward(livePath, tempPath); err != nil {
+			_ = os.Remove(tempPath)
+			return 0, fmt.Errorf("carry enrichment forward: %w", err)
+		}
+	}
 	return n, promote(tempPath, livePath)
 }
 

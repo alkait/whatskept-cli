@@ -17,9 +17,10 @@ the installed binary can do.
 ```
 
 The text in the database is the record: media files in `.unenriched/`
-exist only until enrichment turns them into text, then they are deleted.
-(Enrichment is not implemented in this binary version yet — the files
-simply wait.)
+exist only until `whatskept enrich` turns them into text (image
+OCR/descriptions, voice transcripts, PDF text), then they are deleted.
+An empty `.unenriched/` means fully enriched; `.unenriched/*/failed/`
+holds files that failed permanently (flagged or unreadable content).
 
 ## settings.json
 
@@ -49,10 +50,13 @@ Look at `settings.json` and the files, then pick the path:
 2. **Bound, but no `ChatStorage.sqlite`** — a previous import bound the
    workspace but extraction didn't finish → suggest re-importing, from
    the bound device only.
-3. **`ChatStorage.sqlite` present** — the history is imported → offer
-   to serve it over MCP (below). Re-importing from a newer backup of
-   the same device is also fine at any time; it replaces the database
-   wholesale.
+3. **`ChatStorage.sqlite` present, files in `.unenriched/`** — imported
+   but not fully enriched → offer to run enrichment (below).
+4. **`ChatStorage.sqlite` present, `.unenriched/` empty** — fully
+   processed → offer to serve it over MCP (below). Re-importing from a
+   newer backup of the same device is also fine at any time; it
+   replaces the database wholesale, but enrichment results are carried
+   forward automatically and already-enriched media is not re-queued.
 
 ## Importing a backup
 
@@ -81,6 +85,22 @@ Look at `settings.json` and the files, then pick the path:
    each stage and ends with a count of indexed messages. "missing"
    counts in the media stats are normal (iOS skips blobs not recently
    viewed on the device) — not errors.
+
+## Enriching
+
+Enrichment sends the queued media through OpenRouter (paid API) and
+indexes the resulting text. Ask the user for their OpenRouter API key
+first — inline env var, never stored, never echoed:
+
+```
+OPENROUTER_API_KEY=<key> whatskept enrich
+```
+
+It is fully resumable: interrupt or re-run any time, it continues where
+it left off. Exit 0 means the queue fully drained. A non-zero exit with
+"still queued" counts means transient API failures — just re-run later.
+Files reported in `failed/` were rejected permanently (content flagged
+or unreadable); they need no attention unless the user asks.
 
 ## Serving over MCP
 

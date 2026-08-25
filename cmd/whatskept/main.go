@@ -14,6 +14,7 @@ Usage:
   whatskept init [dir]               initialize a workspace (default: current directory)
   whatskept import <ios-backup-path> import history from an iOS backup
   whatskept import --list            list iOS backups on this machine
+  whatskept enrich                   turn queued media into searchable text via OpenRouter
   whatskept mcp --database <file>    serve a database file over MCP (HTTP) [--addr host:port]
   whatskept -h | --help              show this help
 `
@@ -52,6 +53,11 @@ func main() {
 			return
 		}
 		if err := runImport(filepath.Clean(os.Args[2])); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
+	case "enrich":
+		if err := runEnrich(); err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
