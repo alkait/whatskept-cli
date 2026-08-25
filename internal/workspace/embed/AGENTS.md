@@ -10,17 +10,34 @@ the installed binary can do.
 ## What lives here
 
 ```
-./ChatStorage.sqlite     # the database — messages, chats, SQL views, FTS index
-./.unenriched/           # decrypted media awaiting enrichment (media/, voice/, documents/)
+./ChatStorage.sqlite         # the database — messages, chats, SQL views, FTS index
 ./.whatskept/settings.json   # portable workspace configuration (see below)
-./CLAUDE.md, ./AGENTS.md     # this guide (same content, two filenames)
+./AGENTS.md                  # this guide (the source of truth)
+./CLAUDE.md                  # one-line stub importing AGENTS.md
+./.unenriched/               # the enrichment queue:
+    media/<rowid>.<ext>      #   images awaiting OCR + description
+    voice/<rowid>.opus       #   voice notes awaiting transcription
+    documents/<rowid>.pdf    #   PDFs awaiting text extraction
+    */failed/                #   permanently-failed files (flagged/unreadable) — quarantined
+    enrich.log               #   append-only history of every enrichment attempt
 ```
 
-The text in the database is the record: media files in `.unenriched/`
-exist only until `whatskept enrich` turns them into text (image
-OCR/descriptions, voice transcripts, PDF text), then they are deleted.
-An empty `.unenriched/` means fully enriched; `.unenriched/*/failed/`
-holds files that failed permanently (flagged or unreadable content).
+The text in the database is the record: files in `.unenriched/` exist
+only until `whatskept enrich` turns them into text, then they are
+deleted. The filename stem is the message rowid — it joins directly to
+`ZWAMESSAGE.Z_PK` and the `wa_image_text` / `wa_voice_text` /
+`wa_document_text` result tables. So the queue state reads directly:
+an empty `.unenriched/` means fully enriched; files still in the kind
+directories are pending; files under `failed/` are permanently rejected.
+
+`enrich.log` is your history across runs — one timestamped line per
+event (`run start`, `<kind> <rowid> enriched`, `… transient <reason>
+(still queued)`, `… failed <reason> -> failed/`, `run done
+enriched=… failed=… remaining=…`). Use it to understand what previous
+runs did, why files are still queued, and to spot patterns (e.g. one
+rowid failing transiently run after run → suggest moving it to
+`failed/` manually). It can grow to tens of thousands of lines — always
+`grep`/`tail` it, never read it whole.
 
 ## settings.json
 
@@ -51,7 +68,11 @@ Look at `settings.json` and the files, then pick the path:
    workspace but extraction didn't finish → suggest re-importing, from
    the bound device only.
 3. **`ChatStorage.sqlite` present, files in `.unenriched/`** — imported
-   but not fully enriched → offer to run enrichment (below).
+   but not fully enriched → check `enrich.log` for what earlier runs
+   did (hard failures? transient outage? never run at all?), then offer
+   to run enrichment (below). Read-only SQL (`sqlite3 -readonly`)
+   against the `wa_*_text` tables vs. the queue counts tells you the
+   coverage gap precisely.
 4. **`ChatStorage.sqlite` present, `.unenriched/` empty** — fully
    processed → offer to serve it over MCP (below). Re-importing from a
    newer backup of the same device is also fine at any time; it
@@ -100,7 +121,9 @@ It is fully resumable: interrupt or re-run any time, it continues where
 it left off. Exit 0 means the queue fully drained. A non-zero exit with
 "still queued" counts means transient API failures — just re-run later.
 Files reported in `failed/` were rejected permanently (content flagged
-or unreadable); they need no attention unless the user asks.
+or unreadable); they need no attention unless the user asks. Every
+attempt is appended to `.unenriched/enrich.log` — grep it to diagnose
+what happened and to advise the user on the next action.
 
 ## Serving over MCP
 
@@ -135,9 +158,14 @@ instructions for whichever agent connects.
 ## Hard rules
 
 - **Never** read `.env`, or echo/store the backup password or MCP token.
-- **Never** read `.unenriched/**` file contents into your context — it
-  is an enrichment queue holding tens of thousands of media files, not
-  reading material.
-- **Never** open or modify `ChatStorage.sqlite` directly; MCP is the
-  query surface.
+- **Never modify the database.** Read-only inspection is fine and
+  encouraged for supervising enrichment (`sqlite3 -readonly
+  ./ChatStorage.sqlite "..."`), but no INSERT/UPDATE/DELETE/DROP, ever
+  — this is the user's only copy. End-user questions about the chat
+  history still go through MCP, not direct SQL.
+- **Never read media file contents into your context.** Listing
+  `.unenriched/` files, counting them, and checking names/sizes is fine
+  (that's how you assess progress); piping the bytes of a
+  `.jpg`/`.opus`/`.pdf` into a model is not — enrichment exists so you
+  never need to.
 - Don't edit `settings.json` unless the user explicitly asks.

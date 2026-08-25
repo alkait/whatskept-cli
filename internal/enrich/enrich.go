@@ -32,6 +32,40 @@ const (
 // needed anywhere.
 const FailedDir = "failed"
 
+// LogName is the append-only attempt log at .unenriched/enrich.log:
+// one timestamped line per event across all runs. Pure observability —
+// the runner never reads it (the queue directory stays the only
+// control state); it exists so an operator agent can reconstruct what
+// happened in previous runs (e.g. spot a file that fails transiently
+// every single run) and suggest the next action.
+const LogName = "enrich.log"
+
+// attemptLog appends to the run history. A log that can't be opened
+// degrades to a no-op — observability must never fail a run.
+type attemptLog struct{ f *os.File }
+
+func openAttemptLog(unenriched string) *attemptLog {
+	_ = os.MkdirAll(unenriched, 0o755)
+	f, err := os.OpenFile(filepath.Join(unenriched, LogName), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return &attemptLog{}
+	}
+	return &attemptLog{f: f}
+}
+
+func (l *attemptLog) line(format string, args ...any) {
+	if l.f == nil {
+		return
+	}
+	fmt.Fprintf(l.f, "%s %s\n", time.Now().UTC().Format(time.RFC3339), fmt.Sprintf(format, args...))
+}
+
+func (l *attemptLog) close() {
+	if l.f != nil {
+		l.f.Close()
+	}
+}
+
 // KindStats tallies one media kind for a run.
 type KindStats struct {
 	Enriched  int // text committed, file deleted
@@ -113,7 +147,8 @@ func Run(ctx context.Context, opts Options) (Stats, error) {
 		return stats, err
 	}
 
-	queue, err := scanQueue(filepath.Join(opts.Root, ".unenriched"))
+	unenriched := filepath.Join(opts.Root, ".unenriched")
+	queue, err := scanQueue(unenriched)
 	if err != nil {
 		return stats, err
 	}
@@ -121,6 +156,9 @@ func Run(ctx context.Context, opts Options) (Stats, error) {
 		log("Queue is empty — nothing to enrich.")
 		return stats, nil
 	}
+	al := openAttemptLog(unenriched)
+	defer al.close()
+	al.line("run start queue=%d", len(queue))
 
 	// Drop orphans (message deleted on device / older import) and
 	// already-enriched leftovers (a crash between commit and delete)
@@ -144,9 +182,11 @@ func Run(ctx context.Context, opts Options) (Stats, error) {
 		case !alive[it.rowid]:
 			_ = os.Remove(it.path)
 			ks.Orphaned++
+			al.line("%s %d orphaned (message no longer in DB; file removed)", it.kind, it.rowid)
 		case done[it.kind][it.rowid]:
 			_ = os.Remove(it.path)
 			ks.Enriched++
+			al.line("%s %d enriched (already in DB; leftover file removed)", it.kind, it.rowid)
 		default:
 			pending = append(pending, it)
 		}
@@ -196,11 +236,13 @@ func Run(ctx context.Context, opts Options) (Stats, error) {
 			if err := res.write(db); err != nil {
 				// Commit failed: keep the file — it stays queued.
 				log(fmt.Sprintf("%s %d: db write failed (kept in queue): %v", res.it.kind, res.it.rowid, err))
+				al.line("%s %d transient db write failed: %v (still queued)", res.it.kind, res.it.rowid, err)
 				ks.Remaining++
 				continue
 			}
 			_ = os.Remove(res.it.path)
 			ks.Enriched++
+			al.line("%s %d enriched", res.it.kind, res.it.rowid)
 			consecutiveTransient = 0
 			processed++
 			if processed%progressEvery == 0 {
@@ -214,15 +256,18 @@ func Run(ctx context.Context, opts Options) (Stats, error) {
 		case ClassOf(res.err) == ClassPermanent:
 			if err := quarantine(res.it.path); err != nil {
 				log(fmt.Sprintf("%s %d: quarantine failed (kept in queue): %v", res.it.kind, res.it.rowid, err))
+				al.line("%s %d transient quarantine failed: %v (still queued)", res.it.kind, res.it.rowid, err)
 				ks.Remaining++
 			} else {
 				log(fmt.Sprintf("%s %d: permanent failure, moved to failed/: %v", res.it.kind, res.it.rowid, res.err))
+				al.line("%s %d failed %v -> failed/", res.it.kind, res.it.rowid, res.err)
 				ks.Failed++
 			}
 			consecutiveTransient = 0
 		default: // transient, retries exhausted — stays queued
 			if runCtx.Err() == nil {
 				log(fmt.Sprintf("%s %d: transient failure (still queued): %v", res.it.kind, res.it.rowid, res.err))
+				al.line("%s %d transient %v (still queued)", res.it.kind, res.it.rowid, res.err)
 			}
 			ks.Remaining++
 			consecutiveTransient++
@@ -235,9 +280,11 @@ func Run(ctx context.Context, opts Options) (Stats, error) {
 		}
 	}
 	if hardErr != nil {
+		al.line("run aborted: %v", hardErr)
 		return stats, hardErr
 	}
 	if ctx.Err() != nil {
+		al.line("run interrupted")
 		return stats, ctx.Err()
 	}
 
@@ -249,7 +296,13 @@ func Run(ctx context.Context, opts Options) (Stats, error) {
 			return stats, fmt.Errorf("rebuild FTS: %w", err)
 		}
 		stats.FTSRows = n
+		al.line("fts rebuilt rows=%d", n)
 	}
+	al.line("run done enriched=%d failed=%d remaining=%d orphaned=%d",
+		stats.Images.Enriched+stats.Voice.Enriched+stats.Documents.Enriched,
+		stats.Images.Failed+stats.Voice.Failed+stats.Documents.Failed,
+		stats.Images.Remaining+stats.Voice.Remaining+stats.Documents.Remaining,
+		stats.Images.Orphaned+stats.Voice.Orphaned+stats.Documents.Orphaned)
 	return stats, nil
 }
 

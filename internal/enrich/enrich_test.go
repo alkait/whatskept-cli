@@ -420,6 +420,97 @@ func TestRunPreflightFailureTouchesNothing(t *testing.T) {
 	}
 }
 
+func readLog(t *testing.T, root string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(root, ".unenriched", LogName))
+	if err != nil {
+		t.Fatalf("enrich.log: %v", err)
+	}
+	return string(data)
+}
+
+// The attempt log is the cross-run history an operator agent reads:
+// every outcome, timestamped, appended across runs.
+func TestRunWritesAttemptLog(t *testing.T) {
+	root := writeWorkspace(t, 1, 2, 3)
+	writeQueued(t, root, "media", "1.jpg")   // will be flagged → failed/
+	writeQueued(t, root, "voice", "2.opus")  // will succeed
+	writeQueued(t, root, "media", "99.jpg")  // orphan
+	var calls atomic.Int64
+	c, _ := newTestClient(t, 200, func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Model string `json:"model"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		calls.Add(1)
+		if req.Model == ImageModel {
+			w.WriteHeader(403)
+			fmt.Fprint(w, `{"error":{"code":403,"message":"flagged","metadata":{"reasons":["x"]}}}`)
+			return
+		}
+		chatOK(w, "hello there")
+	})
+
+	if _, err := run(t, root, c, 1, false); err != nil {
+		t.Fatal(err)
+	}
+	logText := readLog(t, root)
+	for _, want := range []string{
+		"run start queue=3",
+		"images 99 orphaned",
+		"voice 2 enriched",
+		"images 1 failed",
+		"-> failed/",
+		"run done enriched=1 failed=1 remaining=0 orphaned=1",
+	} {
+		if !strings.Contains(logText, want) {
+			t.Errorf("log missing %q:\n%s", want, logText)
+		}
+	}
+	// Every line starts with an RFC3339 timestamp.
+	for _, line := range strings.Split(strings.TrimSpace(logText), "\n") {
+		if len(line) < 20 || line[4] != '-' || line[10] != 'T' {
+			t.Errorf("line not timestamped: %q", line)
+		}
+	}
+
+	// A second run appends — history survives across runs.
+	writeQueued(t, root, "voice", "3.opus")
+	cUp, _ := newTestClient(t, 200, perModel(new(atomic.Int64)))
+	if _, err := run(t, root, cUp, 1, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(readLog(t, root), "run start"); got != 2 {
+		t.Errorf("run start lines = %d, want 2 (append-only)", got)
+	}
+}
+
+func TestRunLogsTransientAndAbort(t *testing.T) {
+	root := writeWorkspace(t, 1)
+	writeQueued(t, root, "voice", "1.opus")
+	c, _ := newTestClient(t, 200, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(503)
+	})
+	c.MaxRetries = 1
+	if _, err := run(t, root, c, 1, false); err != nil {
+		t.Fatal(err)
+	}
+	logText := readLog(t, root)
+	if !strings.Contains(logText, "voice 1 transient") || !strings.Contains(logText, "still queued") {
+		t.Errorf("log missing transient line:\n%s", logText)
+	}
+
+	cHard, _ := newTestClient(t, 200, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(402)
+	})
+	if _, err := run(t, root, cHard, 1, false); err == nil {
+		t.Fatal("expected hard abort")
+	}
+	if !strings.Contains(readLog(t, root), "run aborted") {
+		t.Error("log missing 'run aborted' line")
+	}
+}
+
 func TestRunNoDatabase(t *testing.T) {
 	root := t.TempDir()
 	_, err := Run(context.Background(), Options{Root: root, Client: &Client{APIKey: "k"}})
