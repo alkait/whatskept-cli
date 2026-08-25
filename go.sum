@@ -3,8 +3,8 @@ github.com/dunhamsteve/ios v0.0.0-20221226180243-59e6dc4fa1a9/go.mod h1:B4yeke0t
 github.com/dunhamsteve/plist v0.0.0-20211213035615-a528b51ff82f h1:isN+gnW3pKSwhwGiENPfVy960FJ3uOI2K+x4X3r57AE=
 github.com/dunhamsteve/plist v0.0.0-20211213035615-a528b51ff82f/go.mod h1:wYdaZYuFSWCziwZl3+0BNSnBCw1FKv4/V2JtV+RA6Xc=
 github.com/jessevdk/go-flags v1.4.0/go.mod h1:4FA24M0QyGHXBuZZK/XkWh8h0e1EYbRYJSGM75WSRxI=
-github.com/mattn/go-sqlite3 v1.14.15 h1:vfoHhTN1af61xCRSWzFIWzx2YskyMTwHLrExkBOjvxI=
-github.com/mattn/go-sqlite3 v1.14.15/go.mod h1:2eHXhiwb8IkHr+BDWZGa96P6+rkvnG63S2DGjv9HUNg=
+github.com/mattn/go-sqlite3 v1.14.50 h1:dmdFvo1XG4MPzA4IkAmE9upVz/Nj31uRoM5+jC8hYbY=
+github.com/mattn/go-sqlite3 v1.14.50/go.mod h1:6JTjA44L93a0QCyJef5YvlPoKXntQPjzWv5gtm9sB6w=
 golang.org/x/crypto v0.0.0-20221010152910-d6f0a8c073c2 h1:x8vtB3zMecnlqZIwJNUUpwYKYSqCz5jXbiyv0ZJJZeI=
 golang.org/x/crypto v0.0.0-20221010152910-d6f0a8c073c2/go.mod h1:IxCIyHEi3zRg3s0A5j5BB6A9Jmi73HwBIUl50j+osU4=
 gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=

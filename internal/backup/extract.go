@@ -16,6 +16,10 @@ const ChatStorageName = "ChatStorage.sqlite"
 
 const whatsAppDomain = "AppDomainGroup-group.net.whatsapp.WhatsApp.shared"
 
+// Record is a backup-manifest entry for one file, aliased so callers
+// don't import the underlying library.
+type Record = dunhamsteve.Record
+
 // Bundle is an opened-and-unlocked encrypted iOS backup. The keybag
 // unlock costs seconds on a large backup, so one Bundle is reused for
 // every read during an import.
@@ -28,6 +32,10 @@ type Bundle interface {
 	// the workspace root, via a staging file promoted atomically over
 	// any previous copy. Returns the number of bytes written.
 	ExtractChatStorage(root string) (int64, error)
+	// ExtractBlobs decrypts images, voice notes and PDFs referenced by
+	// the extracted ChatStorage.sqlite into <root>/.unenriched/. log
+	// (nil for silent) receives progress lines.
+	ExtractBlobs(root string, log func(string)) (BlobStats, error)
 }
 
 // Open validates and unlocks the encrypted backup at dir, reading the
@@ -87,7 +95,7 @@ func (b *bundle) ExtractChatStorage(root string) (int64, error) {
 	tempPath := livePath + ".new"
 	_ = os.Remove(tempPath) // stale staging from a crashed run
 
-	n, err := b.decryptTo(*rec, tempPath)
+	n, err := b.decryptTo(*rec, tempPath, nil)
 	if err != nil {
 		_ = os.Remove(tempPath)
 		return 0, err
@@ -99,8 +107,10 @@ func (b *bundle) ExtractChatStorage(root string) (int64, error) {
 	return n, promote(tempPath, livePath)
 }
 
-// decryptTo streams one decrypted record to outPath.
-func (b *bundle) decryptTo(rec dunhamsteve.Record, outPath string) (n int64, err error) {
+// decryptTo streams one decrypted record to outPath. A non-nil magic
+// requires the decrypted bytes to start with that signature; a payload
+// failing the check returns errBadMagic and writes nothing.
+func (b *bundle) decryptTo(rec dunhamsteve.Record, outPath string, magic []byte) (n int64, err error) {
 	err = silenceStdout(func() error {
 		rd, err := b.mb.FileReader(rec)
 		if rd != nil && errors.Is(err, io.EOF) {
@@ -110,12 +120,29 @@ func (b *bundle) decryptTo(rec dunhamsteve.Record, outPath string) (n int64, err
 			return err
 		}
 		defer rd.Close()
+
+		head := make([]byte, len(magic))
+		m, err := io.ReadFull(rd, head)
+		if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+			return err
+		}
+		if m == 0 && len(magic) > 0 {
+			return io.EOF // empty payload: blob not persisted, not a format problem
+		}
+		if !magicOK(head[:m], magic) {
+			return errBadMagic
+		}
+
 		w, err := os.Create(outPath)
 		if err != nil {
 			return err
 		}
 		var copyErr error
-		n, copyErr = io.Copy(w, rd)
+		if _, copyErr = w.Write(head[:m]); copyErr == nil {
+			var copied int64
+			copied, copyErr = io.Copy(w, rd)
+			n = int64(m) + copied
+		}
 		if closeErr := w.Close(); copyErr == nil {
 			copyErr = closeErr
 		}

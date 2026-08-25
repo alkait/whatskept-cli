@@ -63,6 +63,18 @@ func runImport(backupPath string) error {
 	}
 	fmt.Printf("extracted %s (%d bytes)\n", backup.ChatStorageName, n)
 
-	fmt.Println("importing messages is not implemented yet")
+	stats, err := b.ExtractBlobs(root, func(line string) { fmt.Println(line) })
+	if err != nil {
+		return err
+	}
+	fmt.Printf("images: %d downloaded, %d missing, %d errors\n",
+		stats.Images.Downloaded, stats.Images.Missing, stats.Images.Errors)
+	fmt.Printf("voice notes: %d downloaded, %d missing, %d errors\n",
+		stats.Voice.Downloaded, stats.Voice.Missing, stats.Voice.Errors)
+	fmt.Printf("documents: %d downloaded, %d missing, %d errors, %d unsupported (non-PDF)\n",
+		stats.Documents.Downloaded, stats.Documents.Missing, stats.Documents.Errors,
+		stats.UnsupportedDocuments)
+
+	fmt.Println("enrichment is not implemented yet")
 	return nil
 }

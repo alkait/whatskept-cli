@@ -84,6 +84,13 @@ func (f *fakeBundle) ExtractChatStorage(root string) (int64, error) {
 	return int64(len(data)), nil
 }
 
+func (f *fakeBundle) ExtractBlobs(root string, log func(string)) (backup.BlobStats, error) {
+	if err := os.MkdirAll(filepath.Join(root, backup.UnenrichedDir, "media"), 0o755); err != nil {
+		return backup.BlobStats{}, err
+	}
+	return backup.BlobStats{}, nil
+}
+
 func stubOpen(t *testing.T, number string) {
 	t.Helper()
 	orig := backup.Open
