@@ -14,6 +14,7 @@ Usage:
   whatskept init [dir]               initialize a workspace (default: current directory)
   whatskept import <ios-backup-path> import history from an iOS backup
   whatskept import --list            list iOS backups on this machine
+  whatskept mcp [--addr host:port]   serve the workspace database over MCP (HTTP)
   whatskept -h | --help              show this help
 `
 
@@ -51,6 +52,11 @@ func main() {
 			return
 		}
 		if err := runImport(filepath.Clean(os.Args[2])); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
+	case "mcp":
+		if err := runMCP(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}

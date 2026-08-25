@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"whatskept/internal/backup"
+	"whatskept/internal/mcpserve"
 )
 
 // binPath is the whatskept binary built once for all CLI tests.
@@ -41,9 +42,9 @@ func run(t *testing.T, dir string, args ...string) (int, string, string) {
 	t.Helper()
 	cmd := exec.Command(binPath, args...)
 	cmd.Dir = dir
-	// Tests must not inherit a real backup password from the developer's
-	// environment; an empty value counts as unset.
-	cmd.Env = append(os.Environ(), backup.PasswordEnv+"=")
+	// Tests must not inherit a real backup password or MCP token from
+	// the developer's environment; an empty value counts as unset.
+	cmd.Env = append(os.Environ(), backup.PasswordEnv+"=", mcpserve.TokenEnv+"=")
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -200,6 +201,28 @@ func TestCLIImportUnencryptedBackup(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "not encrypted") {
 		t.Errorf("stderr = %q", stderr)
+	}
+}
+
+func TestCLIMCPOutsideWorkspace(t *testing.T) {
+	code, _, stderr := run(t, t.TempDir(), "mcp")
+	if code != 1 {
+		t.Errorf("exit %d, want 1", code)
+	}
+	if !strings.Contains(stderr, "not a whatskept workspace") {
+		t.Errorf("stderr = %q", stderr)
+	}
+}
+
+func TestCLIMCPRequiresToken(t *testing.T) {
+	ws := t.TempDir()
+	run(t, ws, "init")
+	code, _, stderr := run(t, ws, "mcp")
+	if code != 1 {
+		t.Errorf("exit %d, want 1", code)
+	}
+	if !strings.Contains(stderr, mcpserve.TokenEnv) {
+		t.Errorf("stderr = %q, want mention of %s", stderr, mcpserve.TokenEnv)
 	}
 }
 
