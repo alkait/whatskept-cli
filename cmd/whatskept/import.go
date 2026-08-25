@@ -2,8 +2,10 @@ package main
 
 import (
 	"fmt"
+	"path/filepath"
 
 	"whatskept/internal/backup"
+	"whatskept/internal/views"
 	"whatskept/internal/workspace"
 )
 
@@ -74,6 +76,12 @@ func runImport(backupPath string) error {
 	fmt.Printf("documents: %d downloaded, %d missing, %d errors, %d unsupported (non-PDF)\n",
 		stats.Documents.Downloaded, stats.Documents.Missing, stats.Documents.Errors,
 		stats.UnsupportedDocuments)
+
+	ftsRows, err := views.Apply(filepath.Join(root, backup.ChatStorageName))
+	if err != nil {
+		return err
+	}
+	fmt.Printf("applied SQL views; %d messages in full-text index\n", ftsRows)
 
 	fmt.Println("enrichment is not implemented yet")
 	return nil

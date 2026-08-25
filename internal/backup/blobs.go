@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 // errBadMagic marks a decrypted payload whose leading bytes don't match
@@ -67,7 +67,7 @@ func (b *bundle) ExtractBlobs(root string, log func(string)) (BlobStats, error) 
 	}
 	var stats BlobStats
 
-	db, err := sql.Open("sqlite3", "file:"+filepath.Join(root, ChatStorageName)+"?mode=ro")
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(root, ChatStorageName)+"?mode=ro")
 	if err != nil {
 		return stats, fmt.Errorf("open %s: %w", ChatStorageName, err)
 	}

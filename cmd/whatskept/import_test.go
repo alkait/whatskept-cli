@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
@@ -76,12 +77,43 @@ type fakeBundle struct{ number string }
 
 func (f *fakeBundle) DetectNumber() (string, error) { return f.number, nil }
 
+// ExtractChatStorage writes a minimal real SQLite DB — import applies
+// the view layer to it afterwards, which needs the Z* tables to exist.
 func (f *fakeBundle) ExtractChatStorage(root string) (int64, error) {
-	data := []byte("fake chatstorage")
-	if err := os.WriteFile(filepath.Join(root, backup.ChatStorageName), data, 0o644); err != nil {
+	path := filepath.Join(root, backup.ChatStorageName)
+	_ = os.Remove(path) // mirror the real replace-wholesale promotion
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
 		return 0, err
 	}
-	return int64(len(data)), nil
+	defer db.Close()
+	if _, err := db.Exec(`
+		CREATE TABLE ZWAMESSAGE (
+			Z_PK INTEGER PRIMARY KEY, ZCHATSESSION INTEGER, ZMESSAGEDATE REAL,
+			ZISFROMME INTEGER, ZMESSAGETYPE INTEGER, ZTEXT TEXT,
+			ZPARENTMESSAGE INTEGER, ZSTANZAID TEXT, ZFROMJID TEXT, ZGROUPMEMBER INTEGER
+		);
+		CREATE TABLE ZWACHATSESSION (
+			Z_PK INTEGER PRIMARY KEY, ZCONTACTJID TEXT, ZCONTACTIDENTIFIER TEXT,
+			ZPARTNERNAME TEXT, ZMESSAGECOUNTER INTEGER, ZLASTMESSAGEDATE REAL, ZARCHIVED INTEGER
+		);
+		CREATE TABLE ZWAGROUPMEMBER (
+			Z_PK INTEGER PRIMARY KEY, ZMEMBERJID TEXT, ZCONTACTNAME TEXT, ZFIRSTNAME TEXT
+		);
+		CREATE TABLE ZWAPROFILEPUSHNAME (ZJID TEXT, ZPUSHNAME TEXT);
+		CREATE TABLE ZWAMEDIAITEM (
+			Z_PK INTEGER PRIMARY KEY, ZMESSAGE INTEGER, ZMEDIALOCALPATH TEXT,
+			ZAUTHORNAME TEXT, ZFILESIZE INTEGER, ZMEDIAURL TEXT, ZTITLE TEXT
+		);
+		INSERT INTO ZWAMESSAGE VALUES (1, 1, 700000000, 0, 0, 'hello', NULL, 's1', 'x@s.whatsapp.net', NULL);`,
+	); err != nil {
+		return 0, err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0, err
+	}
+	return info.Size(), nil
 }
 
 func (f *fakeBundle) ExtractBlobs(root string, log func(string)) (backup.BlobStats, error) {

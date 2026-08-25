@@ -32,7 +32,7 @@ func TestDetectImageFormat(t *testing.T) {
 // image, one voice note, one PDF, one docx, and one pathless document.
 func writeFixtureChatDB(t *testing.T, dir string) *sql.DB {
 	t.Helper()
-	db, err := sql.Open("sqlite3", filepath.Join(dir, ChatStorageName))
+	db, err := sql.Open("sqlite", filepath.Join(dir, ChatStorageName))
 	if err != nil {
 		t.Fatal(err)
 	}
