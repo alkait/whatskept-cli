@@ -233,6 +233,30 @@ func TestCLIEnrichNoDatabase(t *testing.T) {
 	}
 }
 
+// --concurrency overrides the built-in in-flight cap. A negative value
+// is rejected before any workspace or API work; a positive one parses
+// and lets the run proceed to the usual checks.
+func TestCLIEnrichConcurrency(t *testing.T) {
+	ws := t.TempDir()
+	run(t, ws, "init")
+
+	code, _, stderr := run(t, ws, "enrich", "--concurrency", "-1")
+	if code != 1 {
+		t.Errorf("exit %d, want 1", code)
+	}
+	if !strings.Contains(stderr, "--concurrency must be positive") {
+		t.Errorf("stderr = %q, want rejection of a negative value", stderr)
+	}
+
+	code, _, stderr = run(t, ws, "enrich", "--concurrency", "4")
+	if code != 1 {
+		t.Errorf("exit %d, want 1", code)
+	}
+	if !strings.Contains(stderr, "whatskept import") {
+		t.Errorf("stderr = %q, want the flag accepted and the run to reach the database check", stderr)
+	}
+}
+
 func TestCLIMCPRequiresDatabase(t *testing.T) {
 	code, _, stderr := run(t, t.TempDir(), "mcp")
 	if code != 1 {

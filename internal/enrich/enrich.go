@@ -16,7 +16,12 @@ import (
 )
 
 const (
-	defaultConcurrency = 8
+	// defaultConcurrency is the in-flight OpenRouter request cap. The
+	// original repo defaulted to a conservative 8; we run much hotter
+	// because the error taxonomy absorbs pushback safely (429s retry
+	// with Retry-After-aware backoff, and sustained failure trips the
+	// circuit breaker). --concurrency overrides in either direction.
+	defaultConcurrency = 48
 
 	// breakerThreshold aborts the run after this many CONSECUTIVE items
 	// exhaust their transient retries — that pattern is an outage, not
@@ -97,7 +102,7 @@ func (s Stats) Drained() bool {
 type Options struct {
 	Root        string // workspace root: <Root>/ChatStorage.sqlite, <Root>/.unenriched/
 	Client      *Client
-	Concurrency int          // workers; default 8
+	Concurrency int          // in-flight requests; 0 = defaultConcurrency
 	Log         func(string) // progress lines; nil = silent
 	// RebuildFTS is called once at the end when anything was enriched
 	// (the caller wires views.Apply; injected to keep packages

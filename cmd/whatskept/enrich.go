@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
 	"os/signal"
@@ -16,7 +17,16 @@ import (
 // OpenRouter. Exit contract: nil (exit 0) only when the queue fully
 // drained; anything left failing or queued is an error the caller
 // should see.
-func runEnrich() error {
+func runEnrich(args []string) error {
+	fs := flag.NewFlagSet("enrich", flag.ContinueOnError)
+	concurrency := fs.Int("concurrency", 0,
+		"in-flight OpenRouter requests (0 = built-in default; lower it when the API pushes back)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *concurrency < 0 {
+		return fmt.Errorf("--concurrency must be positive, got %d", *concurrency)
+	}
 	root, err := workspace.Find()
 	if err != nil {
 		return err
@@ -25,10 +35,11 @@ func runEnrich() error {
 	defer stop()
 
 	stats, err := enrich.Run(ctx, enrich.Options{
-		Root:       root,
-		Client:     &enrich.Client{APIKey: os.Getenv(enrich.APIKeyEnv)},
-		Log:        func(line string) { fmt.Println(line) },
-		RebuildFTS: views.Apply,
+		Root:        root,
+		Client:      &enrich.Client{APIKey: os.Getenv(enrich.APIKeyEnv)},
+		Concurrency: *concurrency,
+		Log:         func(line string) { fmt.Println(line) },
+		RebuildFTS:  views.Apply,
 	})
 	printKind := func(name string, k enrich.KindStats) {
 		fmt.Printf("%s: %d enriched, %d failed, %d still queued, %d orphaned\n",
