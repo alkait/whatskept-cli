@@ -70,6 +70,11 @@ func TestCLIInit(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "ws1", ".whatskept", "settings.json")); err != nil {
 		t.Errorf("settings.json missing: %v", err)
 	}
+	for _, name := range []string{"CLAUDE.md", "AGENTS.md"} {
+		if _, err := os.Stat(filepath.Join(dir, "ws1", name)); err != nil {
+			t.Errorf("%s missing: %v", name, err)
+		}
+	}
 }
 
 func TestCLIInitIdempotent(t *testing.T) {

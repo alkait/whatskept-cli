@@ -3,6 +3,7 @@
 package workspace
 
 import (
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,13 @@ import (
 )
 
 const markerDir = ".whatskept"
+
+// agentGuide is the operator guide dropped into every workspace as
+// CLAUDE.md and AGENTS.md. Rewritten on every init so an upgraded
+// binary refreshes the guidance.
+//
+//go:embed embed/AGENTS.md
+var agentGuide []byte
 
 // Settings is the portable configuration stored in settings.json.
 type Settings struct {
@@ -63,19 +71,26 @@ func Save(root string, s Settings) error {
 }
 
 // Init initializes dir as a workspace, creating it if needed. Returns
-// already=true (and does nothing) when dir is one.
+// already=true when dir is one — but the agent guides are (re)written
+// either way, so re-running init after a binary upgrade refreshes them.
 func Init(dir string) (already bool, err error) {
 	marker := filepath.Join(dir, markerDir)
-	if _, err := os.Stat(marker); err == nil {
-		return true, nil
+	if _, statErr := os.Stat(marker); statErr == nil {
+		already = true
+	} else {
+		if err := os.MkdirAll(marker, 0o755); err != nil {
+			return false, err
+		}
+		if err := Save(dir, Settings{CreatedAt: time.Now().UTC()}); err != nil {
+			return false, err
+		}
 	}
-	if err := os.MkdirAll(marker, 0o755); err != nil {
-		return false, err
+	for _, name := range []string{"CLAUDE.md", "AGENTS.md"} {
+		if err := os.WriteFile(filepath.Join(dir, name), agentGuide, 0o644); err != nil {
+			return already, err
+		}
 	}
-	if err := Save(dir, Settings{CreatedAt: time.Now().UTC()}); err != nil {
-		return false, err
-	}
-	return false, nil
+	return already, nil
 }
 
 // Find walks up from the current directory looking for a .whatskept/

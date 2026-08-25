@@ -3,6 +3,7 @@ package workspace
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -56,6 +57,41 @@ func TestInitIsIdempotent(t *testing.T) {
 	after := readSettings(t, dir)
 	if !after.CreatedAt.Equal(before.CreatedAt) {
 		t.Errorf("re-init rewrote settings.json: %v -> %v", before.CreatedAt, after.CreatedAt)
+	}
+}
+
+func TestInitWritesAgentGuides(t *testing.T) {
+	dir := t.TempDir()
+	mustInit(t, dir)
+	for _, name := range []string{"CLAUDE.md", "AGENTS.md"} {
+		data, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatalf("%s missing: %v", name, err)
+		}
+		if !strings.Contains(string(data), "whatskept workspace") {
+			t.Errorf("%s does not look like the operator guide", name)
+		}
+	}
+}
+
+// Re-init must refresh stale guides (an upgraded binary carries newer
+// guidance) without touching settings.json.
+func TestReInitRefreshesAgentGuides(t *testing.T) {
+	dir := t.TempDir()
+	mustInit(t, dir)
+	stale := filepath.Join(dir, "CLAUDE.md")
+	if err := os.WriteFile(stale, []byte("outdated"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Init(dir); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(stale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) == "outdated" {
+		t.Error("re-init did not refresh CLAUDE.md")
 	}
 }
 
