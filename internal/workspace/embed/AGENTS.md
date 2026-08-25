@@ -58,6 +58,13 @@ to switch device/account, the escape hatch is a fresh workspace (or
 they can hand-edit settings.json themselves; don't do it for them
 unprompted).
 
+## This guide vs. the binary
+
+Run `whatskept -h` (and `<command> --help`) to see the installed
+binary's actual commands and flags — trust that over this file. If they
+disagree, this guide is stale: run `whatskept init` here to refresh it,
+then re-read it.
+
 ## First: scan the workspace state
 
 Look at `settings.json` and the files, then pick the path:
