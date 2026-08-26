@@ -64,11 +64,20 @@ resolution, and the LID↔phone bridge for you.
 
 ## Pitfalls
 
-1. **Timestamps are UTC.** `v_messages.ts` and `v_chats.last_message_at`
-   are UTC ISO strings, comparable directly with SQLite's
-   `datetime('now')`. When the user speaks in their local wall clock,
-   shift explicitly — e.g. for UTC+4:
-   `WHERE date(ts, '+4 hours') = date('now', '+4 hours')`.
+1. **Timestamps are UTC — convert at both ends.** `v_messages.ts` and
+   `v_chats.last_message_at` are UTC ISO strings, comparable directly
+   with SQLite's `datetime('now')`.
+   - **Querying**: use the user's local wall clock — "today", "last
+     night", "this week" mean the user's frame, so shift explicitly in
+     SQL — e.g. for UTC+4:
+     `WHERE date(ts, '+4 hours') = date('now', '+4 hours')`.
+   - **Answering**: never quote a raw UTC timestamp back. Convert to
+     the user's local time and say so ("at 00:26 your time"). Times
+     near midnight can fall on a different calendar day locally — get
+     the day right in the user's frame, not UTC's.
+   - If you don't know the user's timezone, ask once — or label times
+     explicitly as UTC until you do.
+
    Raw `ZWAMESSAGE.ZMESSAGEDATE` is Cocoa epoch and untouched by any of
    this — avoid it; the views convert for you.
 2. **`text` is NULL for media** — join the side tables (see above).
