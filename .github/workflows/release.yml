@@ -1,0 +1,57 @@
+name: release
+
+# Every push to main cuts a release: v0.1.<run-number> with one binary
+# per platform. Builds are native per-runner (no cross-compiling)
+# because the iOS-backup path needs cgo.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest # Apple Silicon
+            artifact: whatskept-darwin-arm64
+          - os: windows-latest
+            artifact: whatskept-windows-amd64.exe
+          - os: ubuntu-24.04-arm # Raspberry Pi 3/4/5 (64-bit OS)
+            artifact: whatskept-linux-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go build -o ${{ matrix.artifact }} ./cmd/whatskept
+      # The subprocess tests build/exec a bare "whatskept" binary, which
+      # Windows can't execute without .exe — skip tests there; the
+      # suite runs fully on the other two platforms.
+      - run: go test ./...
+        if: runner.os != 'Windows'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="v0.1.${{ github.run_number }}"
+          gh release create "$tag" dist/* \
+            --repo "${{ github.repository }}" \
+            --title "$tag" \
+            --notes "Automated release from ${{ github.sha }}"
