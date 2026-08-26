@@ -129,7 +129,8 @@ curl -s https://openrouter.ai/api/v1/credits -H "Authorization: Bearer $OPENROUT
 
 The remaining balance is `total_credits - total_usage` (USD). Tell the
 user the balance and the queue size so they can decide whether to
-proceed. Then run:
+proceed. All costs and balances are reported in USD, exactly as
+OpenRouter states them — never convert to another currency. Then run:
 
 ```
 OPENROUTER_API_KEY=<key> whatskept enrich
