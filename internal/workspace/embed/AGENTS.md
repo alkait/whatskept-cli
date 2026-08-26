@@ -67,7 +67,24 @@ then re-read it.
 
 ## First: scan the workspace state
 
-Look at `settings.json` and the files, then pick the path:
+Check whether a `.env` file exists and which variables it defines —
+names only, never the values:
+
+```
+cut -d= -f1 .env
+```
+
+The commands read `WHATSKEPT_BACKUP_PASSWORD` (import),
+`OPENROUTER_API_KEY` (enrich), and `WHATSKEPT_MCP_TOKEN` (mcp) from
+the environment. For any of those already in `.env`, don't ask the
+user for the secret again — source the file into the command's
+environment instead:
+
+```
+set -a; source .env; set +a; whatskept enrich
+```
+
+Then look at `settings.json` and the files, and pick the path:
 
 1. **Clean slate** — no `udid`, no `ChatStorage.sqlite` → offer to
    import an encrypted iOS backup (below).
@@ -203,7 +220,10 @@ instructions for whichever agent connects.
 
 ## Hard rules
 
-- **Never** read `.env`, or echo/store the backup password or MCP token.
+- **Never** read, echo, or store secret values — not from `.env`, not
+  from the user's messages. Listing `.env`'s variable NAMES
+  (`cut -d= -f1 .env`) is fine; `cat .env` or printing any value is
+  not. Secrets reach commands only via the environment.
 - **Never modify the database.** Read-only inspection is fine and
   encouraged for supervising enrichment (`sqlite3 -readonly
   ./ChatStorage.sqlite "..."`), but no INSERT/UPDATE/DELETE/DROP, ever
