@@ -7,6 +7,10 @@ the user's behalf — import their backup, and serve the result over MCP.
 This file is (re)written by `whatskept init` and always describes what
 the installed binary can do.
 
+Keep every answer to the user short and concise: state the facts, the
+numbers, and the next action — no filler, no restating what the user
+already knows.
+
 ## What lives here
 
 ```
