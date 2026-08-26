@@ -44,20 +44,14 @@ After saying "Hi", or really any thing the the agent takes over and guides you t
 
 ## Dev
 
-Build the binary (repo root):
-
-```
-go build -o whatskept ./cmd/whatskept
-```
-
-Re-sign it (needed on macOS: fixes the cgo ad-hoc signature):
-
-```
-codesign -f -s - whatskept
-```
-
-Run all tests:
+Run all tests (repo root):
 
 ```
 go test ./...
+```
+
+Build the binary:
+
+```
+go build -o whatskept ./cmd/whatskept
 ```
