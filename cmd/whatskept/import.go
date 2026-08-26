@@ -83,6 +83,9 @@ func runImport(backupPath string) error {
 	}
 	fmt.Printf("applied SQL views; %d messages in full-text index\n", ftsRows)
 
-	fmt.Println("enrichment is not implemented yet")
+	queued := stats.Images.Downloaded + stats.Voice.Downloaded + stats.Documents.Downloaded
+	fmt.Printf("import complete; %d files queued in .unenriched/ — enrichment is a PAID step: "+
+		"check the OpenRouter balance and get the user's go-ahead before running `whatskept enrich` (see AGENTS.md)\n",
+		queued)
 	return nil
 }

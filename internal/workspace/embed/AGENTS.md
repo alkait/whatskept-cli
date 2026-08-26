@@ -224,6 +224,10 @@ instructions for whichever agent connects.
   from the user's messages. Listing `.env`'s variable NAMES
   (`cut -d= -f1 .env`) is fine; `cat .env` or printing any value is
   not. Secrets reach commands only via the environment.
+- **Never start `whatskept enrich` — or any paid API call — without
+  the user's explicit go-ahead in the current conversation.** Wanting
+  to "check if it works" is not a reason; `whatskept enrich --help`
+  and this guide answer that for free.
 - **Never modify the database.** Read-only inspection is fine and
   encouraged for supervising enrichment (`sqlite3 -readonly
   ./ChatStorage.sqlite "..."`), but no INSERT/UPDATE/DELETE/DROP, ever
