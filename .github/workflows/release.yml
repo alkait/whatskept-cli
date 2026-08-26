@@ -26,7 +26,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - run: go build -o ${{ matrix.artifact }} ./cmd/whatskept
+      - run: go build -ldflags "-X main.version=v0.1.${{ github.run_number }}" -o ${{ matrix.artifact }} ./cmd/whatskept
       # The subprocess tests build/exec a bare "whatskept" binary, which
       # Windows can't execute without .exe — skip tests there; the
       # suite runs fully on the other two platforms.

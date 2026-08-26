@@ -60,6 +60,18 @@ func run(t *testing.T, dir string, args ...string) (int, string, string) {
 	return code, stdout.String(), stderr.String()
 }
 
+func TestCLIVersion(t *testing.T) {
+	for _, flag := range []string{"-v", "--version"} {
+		code, stdout, _ := run(t, t.TempDir(), flag)
+		if code != 0 {
+			t.Errorf("%s: exit %d, want 0", flag, code)
+		}
+		if stdout != "dev\n" {
+			t.Errorf("%s: stdout = %q, want \"dev\\n\"", flag, stdout)
+		}
+	}
+}
+
 func TestCLIInit(t *testing.T) {
 	dir := t.TempDir()
 	code, stdout, _ := run(t, dir, "init", "ws1")

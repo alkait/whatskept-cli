@@ -18,6 +18,12 @@ was built from and audit that code: should I trust this with my privacy and my W
 install the latest release of https://github.com/alkait/whatskept-cli and put it on my PATH
 ```
 
+## Uninstall prompt
+
+```
+uninstall whatskept from my computer
+```
+
 ## Dev
 
 Build the binary (repo root):

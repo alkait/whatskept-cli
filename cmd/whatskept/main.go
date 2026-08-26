@@ -8,6 +8,10 @@ import (
 	"whatskept/internal/backup"
 )
 
+// version is stamped by the release workflow via
+// -ldflags "-X main.version=v0.1.N"; source builds report "dev".
+var version = "dev"
+
 const usage = `whatskept — WhatsApp history, kept.
 
 Usage:
@@ -16,6 +20,7 @@ Usage:
   whatskept import --list            list iOS backups on this machine
   whatskept enrich                   turn queued media into searchable text via OpenRouter [--concurrency n]
   whatskept mcp --database <file>    serve a database file over MCP (HTTP) [--addr host:port]
+  whatskept -v | --version           show the version
   whatskept -h | --help              show this help
 `
 
@@ -27,6 +32,8 @@ func main() {
 	switch os.Args[1] {
 	case "-h", "--help", "help":
 		fmt.Print(usage)
+	case "-v", "--version", "version":
+		fmt.Println(version)
 	case "init":
 		dir := "."
 		if len(os.Args) > 2 {
