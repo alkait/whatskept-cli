@@ -87,7 +87,8 @@ func perModel(calls *atomic.Int64) http.HandlerFunc {
 			chatOK(w, "remember the tickets tomorrow")
 		default:
 			fmt.Fprint(w, `{"choices":[{"message":{"content":"ok","annotations":[`+
-				`{"type":"file","file":{"content":[{"type":"text","text":"This lease agreement covers the tenancy period in detail."}]}}]}}]}`)
+				`{"type":"file","file":{"content":[{"type":"text","text":"This lease agreement covers the tenancy period in detail."}]}}]}}],`+
+				`"usage":{"cost":0.001}}`)
 		}
 	}
 }
@@ -152,6 +153,23 @@ func TestRunHappyPathWithFTS(t *testing.T) {
 	for _, term := range []string{"tickets", "tenancy", "receipt"} {
 		if got := query1(t, dbPath, `SELECT COUNT(*) FROM messages_fts WHERE messages_fts MATCH '`+term+`'`); got != "1" {
 			t.Errorf("MATCH %s = %s, want 1", term, got)
+		}
+	}
+	// Cost accounting: three calls at $0.001 each, split per kind.
+	if d := stats.TotalCostUSD() - 0.003; d > 1e-9 || d < -1e-9 {
+		t.Errorf("total cost = %f, want 0.003", stats.TotalCostUSD())
+	}
+	if stats.Images.CostUSD != 0.001 || stats.Voice.CostUSD != 0.001 || stats.Documents.CostUSD != 0.001 {
+		t.Errorf("per-kind cost: %+v", stats)
+	}
+	logText := readLog(t, root)
+	for _, want := range []string{
+		"credit balance at start usd=7.5000",
+		"credit balance at end usd=7.5000",
+		"cost_usd=0.0030",
+	} {
+		if !strings.Contains(logText, want) {
+			t.Errorf("log missing %q:\n%s", want, logText)
 		}
 	}
 }
@@ -506,8 +524,14 @@ func TestRunLogsTransientAndAbort(t *testing.T) {
 	if _, err := run(t, root, cHard, 1, false); err == nil {
 		t.Fatal("expected hard abort")
 	}
-	if !strings.Contains(readLog(t, root), "run aborted") {
+	logText = readLog(t, root)
+	if !strings.Contains(logText, "run aborted") {
 		t.Error("log missing 'run aborted' line")
+	}
+	// The end-of-run balance must land even on an abort — the deferred
+	// fetch uses a fresh context, so a cancelled run still reports it.
+	if got := strings.Count(logText, "credit balance at end usd="); got != 2 {
+		t.Errorf("balance-at-end lines = %d, want 2 (one per run, aborted included)", got)
 	}
 }
 

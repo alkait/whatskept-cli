@@ -12,14 +12,21 @@ import (
 	"time"
 )
 
+// fakeCredits is the balance served by the fake /credits endpoint:
+// 10 total, 2.5 used → remaining 7.5.
+const fakeCreditsBody = `{"data":{"total_credits":10,"total_usage":2.5}}`
+
 // newTestClient wires a Client to a fake OpenRouter: /key answers
-// keyStatus, /chat/completions goes to handler. Sleeps are recorded,
-// never real.
+// keyStatus, /credits reports a fixed balance, /chat/completions goes
+// to handler. Sleeps are recorded, never real.
 func newTestClient(t *testing.T, keyStatus int, handler http.HandlerFunc) (*Client, *[]time.Duration) {
 	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/key", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(keyStatus)
+	})
+	mux.HandleFunc("/credits", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, fakeCreditsBody)
 	})
 	if handler != nil {
 		mux.HandleFunc("/chat/completions", handler)
@@ -39,9 +46,10 @@ func newTestClient(t *testing.T, keyStatus int, handler http.HandlerFunc) (*Clie
 	return c, &slept
 }
 
-// chatOK writes a 200 chat response with the given assistant content.
+// chatOK writes a 200 chat response with the given assistant content
+// and a fixed reported cost of $0.001.
 func chatOK(w http.ResponseWriter, content string) {
-	fmt.Fprintf(w, `{"choices":[{"message":{"content":%q}}]}`, content)
+	fmt.Fprintf(w, `{"choices":[{"message":{"content":%q}}],"usage":{"cost":0.001}}`, content)
 }
 
 func TestClassify(t *testing.T) {
@@ -194,6 +202,17 @@ func TestPreflight(t *testing.T) {
 	err = c3.Preflight(context.Background())
 	if err == nil || !strings.Contains(err.Error(), APIKeyEnv) {
 		t.Errorf("empty key must name %s: %v", APIKeyEnv, err)
+	}
+}
+
+func TestBalance(t *testing.T) {
+	c, _ := newTestClient(t, 200, nil)
+	got, err := c.Balance(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 7.5 {
+		t.Errorf("balance = %v, want 7.5 (total_credits - total_usage)", got)
 	}
 }
 

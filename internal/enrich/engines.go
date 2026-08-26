@@ -70,32 +70,33 @@ type imageResult struct {
 }
 
 // describeImage runs one vision call and splits the reply into verbatim
-// OCR and a short description.
-func describeImage(ctx context.Context, c *Client, ext string, data []byte) (imageResult, error) {
+// OCR and a short description. The USD cost is returned even alongside
+// an error so the run's accounting never loses spend.
+func describeImage(ctx context.Context, c *Client, ext string, data []byte) (imageResult, float64, error) {
 	dataURI := "data:" + mimeForImageExt(ext) + ";base64," + base64.StdEncoding.EncodeToString(data)
 	cr, err := c.complete(ctx, ImageModel, []contentPart{
 		{Type: "text", Text: imagePrompt},
 		{Type: "image_url", ImageURL: &imageURLPart{URL: dataURI}},
 	}, nil, imageMaxOutputTokens, 0.1)
 	if err != nil {
-		return imageResult{}, err
+		return imageResult{}, cr.cost(), err
 	}
 	ocr, desc := splitTextDescription(cr.Choices[0].Message.Content)
-	return imageResult{OCRText: ocr, Description: desc}, nil
+	return imageResult{OCRText: ocr, Description: desc}, cr.cost(), nil
 }
 
 // transcribeVoice sends the raw Ogg/Opus bytes and returns the
-// transcript. Empty is a valid result (a silent or noise-only clip).
-func transcribeVoice(ctx context.Context, c *Client, opus []byte) (string, error) {
+// transcript and USD cost. Empty is a valid result (a silent clip).
+func transcribeVoice(ctx context.Context, c *Client, opus []byte) (string, float64, error) {
 	cr, err := c.complete(ctx, VoiceModel, []contentPart{
 		{Type: "text", Text: voicePrompt},
 		{Type: "input_audio", InputAudio: &inputAudioPart{
 			Data: base64.StdEncoding.EncodeToString(opus), Format: "ogg"}},
 	}, nil, voiceMaxOutputTokens, 0)
 	if err != nil {
-		return "", err
+		return "", cr.cost(), err
 	}
-	return strings.TrimSpace(cr.Choices[0].Message.Content), nil
+	return strings.TrimSpace(cr.Choices[0].Message.Content), cr.cost(), nil
 }
 
 // docResult is one extracted document.
@@ -107,53 +108,60 @@ type docResult struct {
 
 // extractDocument pulls a PDF's text: native text layer first (free),
 // OCR when the document is scanned, split-into-page-ranges when it is
-// too large for one request.
-func extractDocument(ctx context.Context, c *Client, filename string, pdf []byte) (docResult, error) {
+// too large for one request. The accumulated USD cost across every
+// call is returned even alongside an error, so accounting never loses
+// spend from a multi-call document.
+func extractDocument(ctx context.Context, c *Client, filename string, pdf []byte) (docResult, float64, error) {
 	pages := docPageCount(pdf) // best-effort; 0 if unreadable
 
 	if len(pdf) > docInlineMaxBytes {
-		return extractSplit(ctx, c, pdf, filename, pages)
+		return extractSplit(ctx, c, pdf, filename, pages, 0)
 	}
 
-	raw, err := parseOnce(ctx, c, pdf, filename, enginePDFText)
+	raw, textCost, err := parseOnce(ctx, c, pdf, filename, enginePDFText)
+	cost := textCost
 	if err == nil && len(stripPDFNoise(raw)) >= docEscalateBelow {
-		return docResult{Text: cleanParsed(raw), Method: "cloud-text", PageCount: pages}, nil
+		return docResult{Text: cleanParsed(raw), Method: "cloud-text", PageCount: pages}, cost, nil
 	}
 
-	ocrRaw, ocrErr := parseOnce(ctx, c, pdf, filename, engineMistralOCR)
+	ocrRaw, ocrCost, ocrErr := parseOnce(ctx, c, pdf, filename, engineMistralOCR)
+	cost += ocrCost
 	if ocrErr != nil {
 		var tooLarge *errTooLarge
 		if errors.As(ocrErr, &tooLarge) {
-			return extractSplit(ctx, c, pdf, filename, pages)
+			return extractSplit(ctx, c, pdf, filename, pages, cost)
 		}
 		// OCR failed but pdf-text returned some text — keep it rather
 		// than failing the item.
 		if err == nil {
 			if t := cleanParsed(raw); t != "" {
-				return docResult{Text: t, Method: "cloud-text", PageCount: pages}, nil
+				return docResult{Text: t, Method: "cloud-text", PageCount: pages}, cost, nil
 			}
 		}
-		return docResult{}, ocrErr
+		return docResult{}, cost, ocrErr
 	}
 	cleaned := cleanParsed(ocrRaw)
 	if cleaned == "" {
-		return docResult{Method: "empty", PageCount: pages}, nil
+		return docResult{Method: "empty", PageCount: pages}, cost, nil
 	}
-	return docResult{Text: cleaned, Method: "cloud-ocr", PageCount: pages}, nil
+	return docResult{Text: cleaned, Method: "cloud-ocr", PageCount: pages}, cost, nil
 }
 
 // extractSplit OCRs an oversized PDF in page-range chunks and stitches
-// the text back in page order.
-func extractSplit(ctx context.Context, c *Client, pdf []byte, filename string, pages int) (docResult, error) {
+// the text back in page order. priorCost is spend already incurred on
+// this document before splitting.
+func extractSplit(ctx context.Context, c *Client, pdf []byte, filename string, pages int, priorCost float64) (docResult, float64, error) {
+	cost := priorCost
 	chunks, err := splitPDF(pdf, pages)
 	if err != nil {
-		return docResult{}, &Error{Class: ClassPermanent, Msg: "split oversized PDF: " + err.Error()}
+		return docResult{}, cost, &Error{Class: ClassPermanent, Msg: "split oversized PDF: " + err.Error()}
 	}
 	var parts []string
 	for i, ch := range chunks {
-		raw, err := parseOnce(ctx, c, ch, fmt.Sprintf("%s.part%d.pdf", filename, i+1), engineMistralOCR)
+		raw, chunkCost, err := parseOnce(ctx, c, ch, fmt.Sprintf("%s.part%d.pdf", filename, i+1), engineMistralOCR)
+		cost += chunkCost
 		if err != nil {
-			return docResult{}, fmt.Errorf("OCR chunk %d/%d: %w", i+1, len(chunks), err)
+			return docResult{}, cost, fmt.Errorf("OCR chunk %d/%d: %w", i+1, len(chunks), err)
 		}
 		if t := cleanParsed(raw); t != "" {
 			parts = append(parts, t)
@@ -161,14 +169,14 @@ func extractSplit(ctx context.Context, c *Client, pdf []byte, filename string, p
 	}
 	text := strings.TrimSpace(strings.Join(parts, "\n\n"))
 	if text == "" {
-		return docResult{Method: "empty", PageCount: pages}, nil
+		return docResult{Method: "empty", PageCount: pages}, cost, nil
 	}
-	return docResult{Text: text, Method: "cloud-ocr", PageCount: pages}, nil
+	return docResult{Text: text, Method: "cloud-ocr", PageCount: pages}, cost, nil
 }
 
 // parseOnce sends one PDF through one file-parser engine and returns
-// the joined annotation text.
-func parseOnce(ctx context.Context, c *Client, pdf []byte, filename, engine string) (string, error) {
+// the joined annotation text and the call's USD cost.
+func parseOnce(ctx context.Context, c *Client, pdf []byte, filename, engine string) (string, float64, error) {
 	dataURI := "data:application/pdf;base64," + base64.StdEncoding.EncodeToString(pdf)
 	cr, err := c.complete(ctx, DocumentModel, []contentPart{
 		{Type: "text", Text: docPrompt},
@@ -176,9 +184,9 @@ func parseOnce(ctx context.Context, c *Client, pdf []byte, filename, engine stri
 	}, []pdfPlugin{{ID: "file-parser", PDF: pdfPluginConfig{Engine: engine}}},
 		docMaxOutputTokens, 0)
 	if err != nil {
-		return "", err
+		return "", cr.cost(), err
 	}
-	return annotationText(cr), nil
+	return annotationText(cr), cr.cost(), nil
 }
 
 // annotationText joins the file-parser annotation segments, dropping the

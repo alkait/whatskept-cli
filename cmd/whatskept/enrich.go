@@ -46,12 +46,13 @@ func runEnrich(args []string) error {
 		RebuildFTS:  views.Apply,
 	})
 	printKind := func(name string, k enrich.KindStats) {
-		fmt.Printf("%s: %d enriched, %d failed, %d still queued, %d orphaned\n",
-			name, k.Enriched, k.Failed, k.Remaining, k.Orphaned)
+		fmt.Printf("%s: %d enriched, %d failed, %d still queued, %d orphaned, $%.4f spent\n",
+			name, k.Enriched, k.Failed, k.Remaining, k.Orphaned, k.CostUSD)
 	}
 	printKind("images", stats.Images)
 	printKind("voice notes", stats.Voice)
 	printKind("documents", stats.Documents)
+	fmt.Printf("total spend: $%.4f\n", stats.TotalCostUSD())
 	if stats.FTSRows > 0 {
 		fmt.Printf("full-text index rebuilt: %d messages\n", stats.FTSRows)
 	}

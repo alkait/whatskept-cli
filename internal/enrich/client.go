@@ -215,6 +215,35 @@ func (c *Client) Preflight(ctx context.Context) error {
 	return nil
 }
 
+// Balance returns the key's remaining OpenRouter credits in USD
+// (total_credits - total_usage, via GET /credits).
+func (c *Client) Balance(ctx context.Context) (float64, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL()+"/credits", nil)
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	resp, err := c.httpClient().Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 200))
+		return 0, fmt.Errorf("credits endpoint: http %d: %s", resp.StatusCode, clip(string(body), 160))
+	}
+	var out struct {
+		Data struct {
+			TotalCredits float64 `json:"total_credits"`
+			TotalUsage   float64 `json:"total_usage"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return 0, fmt.Errorf("decode credits: %w", err)
+	}
+	return out.Data.TotalCredits - out.Data.TotalUsage, nil
+}
+
 // complete POSTs one chat completion and returns the decoded response.
 // Transient failures are retried with backoff (honouring Retry-After);
 // every other failure returns its classified error immediately.
@@ -225,6 +254,7 @@ func (c *Client) complete(ctx context.Context, model string, parts []contentPart
 		MaxTokens:   maxTokens,
 		Temperature: temperature,
 		Plugins:     plugins,
+		Usage:       &usageRequest{Include: true},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("encode request: %w", err)
@@ -331,6 +361,13 @@ type chatRequest struct {
 	MaxTokens   int           `json:"max_tokens"`
 	Temperature float64       `json:"temperature"`
 	Plugins     []pdfPlugin   `json:"plugins,omitempty"`
+	Usage       *usageRequest `json:"usage,omitempty"`
+}
+
+// usageRequest asks OpenRouter to report the request's exact cost in
+// the response body — the basis of the run's cost accounting.
+type usageRequest struct {
+	Include bool `json:"include"`
 }
 
 // pdfPlugin selects OpenRouter's file-parser plugin and its PDF engine
@@ -381,10 +418,21 @@ type chatResponse struct {
 			Annotations []fileAnnotation `json:"annotations"`
 		} `json:"message"`
 	} `json:"choices"`
+	Usage *struct {
+		Cost float64 `json:"cost"` // USD; present because we set usage.include
+	} `json:"usage"`
 	Error *struct {
 		Code    int    `json:"code"`
 		Message string `json:"message"`
 	} `json:"error"`
+}
+
+// cost returns the response's reported USD cost, 0 when absent.
+func (cr *chatResponse) cost() float64 {
+	if cr == nil || cr.Usage == nil {
+		return 0
+	}
+	return cr.Usage.Cost
 }
 
 // fileAnnotation is the file-parser plugin's parsed-document result; the

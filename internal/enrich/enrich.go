@@ -22,7 +22,22 @@ const (
 	breakerThreshold = 5
 
 	progressEvery = 25
+
+	// costLogEvery is how often a cost snapshot line lands in
+	// enrich.log, so cost-per-file is reconstructable from history.
+	costLogEvery = 1000
 )
+
+// logBalance records the key's remaining credits in enrich.log; a
+// fetch failure is logged, never fatal — accounting must not fail runs.
+func logBalance(ctx context.Context, c *Client, al *attemptLog, when string) {
+	balance, err := c.Balance(ctx)
+	if err != nil {
+		al.line("credit balance at %s unavailable: %v", when, err)
+		return
+	}
+	al.line("credit balance at %s usd=%.4f", when, balance)
+}
 
 // DefaultConcurrency is the in-flight OpenRouter request cap. The
 // original repo defaulted to a conservative 8; we run much hotter
@@ -73,10 +88,11 @@ func (l *attemptLog) close() {
 
 // KindStats tallies one media kind for a run.
 type KindStats struct {
-	Enriched  int // text committed, file deleted
-	Failed    int // moved to .unenriched/failed/
-	Remaining int // transient failures — still queued for the next run
-	Orphaned  int // rowid no longer in the DB — file deleted
+	Enriched  int     // text committed, file deleted
+	Failed    int     // moved to .unenriched/failed/
+	Remaining int     // transient failures — still queued for the next run
+	Orphaned  int     // rowid no longer in the DB — file deleted
+	CostUSD   float64 // OpenRouter-reported spend, including failed attempts
 }
 
 // Stats summarizes one Run.
@@ -85,6 +101,11 @@ type Stats struct {
 	Voice     KindStats
 	Documents KindStats
 	FTSRows   int
+}
+
+// TotalCostUSD is the run's OpenRouter-reported spend across kinds.
+func (s Stats) TotalCostUSD() float64 {
+	return s.Images.CostUSD + s.Voice.CostUSD + s.Documents.CostUSD
 }
 
 // Drained reports whether the queue is fully processed (nothing left
@@ -119,9 +140,10 @@ type item struct {
 
 // outcome is a worker's verdict on one item, applied by the collector.
 type outcome struct {
-	it    item
-	write func(db *sql.DB) error // nil when err != nil
-	err   error
+	it      item
+	write   func(db *sql.DB) error // nil when err != nil
+	costUSD float64                // spend incurred, success or not
+	err     error
 }
 
 // Run drains the .unenriched/ queue. Committed work always survives:
@@ -164,6 +186,14 @@ func Run(ctx context.Context, opts Options) (Stats, error) {
 	al := openAttemptLog(unenriched)
 	defer al.close()
 	al.line("run start queue=%d", len(queue))
+	logBalance(ctx, opts.Client, al, "start")
+	// The end-of-run balance must land even when the run is aborted or
+	// the process is signalled (ctx cancelled) — use a fresh context.
+	defer func() {
+		endCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		logBalance(endCtx, opts.Client, al, "end")
+	}()
 
 	// Drop orphans (message deleted on device / older import) and
 	// already-enriched leftovers (a crash between commit and delete)
@@ -236,6 +266,7 @@ func Run(ctx context.Context, opts Options) (Stats, error) {
 	processed := 0
 	for res := range results {
 		ks := stats.kind(res.it.kind)
+		ks.CostUSD += res.costUSD
 		switch {
 		case res.err == nil:
 			if err := res.write(db); err != nil {
@@ -251,7 +282,10 @@ func Run(ctx context.Context, opts Options) (Stats, error) {
 			consecutiveTransient = 0
 			processed++
 			if processed%progressEvery == 0 {
-				log(fmt.Sprintf("enriched %d/%d…", processed, len(pending)))
+				log(fmt.Sprintf("enriched %d/%d… cost_usd=%.4f", processed, len(pending), stats.TotalCostUSD()))
+			}
+			if processed%costLogEvery == 0 {
+				al.line("progress %d/%d cost_usd=%.4f", processed, len(pending), stats.TotalCostUSD())
 			}
 		case ClassOf(res.err) == ClassHard:
 			if hardErr == nil {
@@ -285,11 +319,11 @@ func Run(ctx context.Context, opts Options) (Stats, error) {
 		}
 	}
 	if hardErr != nil {
-		al.line("run aborted: %v", hardErr)
+		al.line("run aborted cost_usd=%.4f: %v", stats.TotalCostUSD(), hardErr)
 		return stats, hardErr
 	}
 	if ctx.Err() != nil {
-		al.line("run interrupted")
+		al.line("run interrupted cost_usd=%.4f", stats.TotalCostUSD())
 		return stats, ctx.Err()
 	}
 
@@ -303,11 +337,12 @@ func Run(ctx context.Context, opts Options) (Stats, error) {
 		stats.FTSRows = n
 		al.line("fts rebuilt rows=%d", n)
 	}
-	al.line("run done enriched=%d failed=%d remaining=%d orphaned=%d",
+	al.line("run done enriched=%d failed=%d remaining=%d orphaned=%d cost_usd=%.4f images_usd=%.4f voice_usd=%.4f documents_usd=%.4f",
 		stats.Images.Enriched+stats.Voice.Enriched+stats.Documents.Enriched,
 		stats.Images.Failed+stats.Voice.Failed+stats.Documents.Failed,
 		stats.Images.Remaining+stats.Voice.Remaining+stats.Documents.Remaining,
-		stats.Images.Orphaned+stats.Voice.Orphaned+stats.Documents.Orphaned)
+		stats.Images.Orphaned+stats.Voice.Orphaned+stats.Documents.Orphaned,
+		stats.TotalCostUSD(), stats.Images.CostUSD, stats.Voice.CostUSD, stats.Documents.CostUSD)
 	return stats, nil
 }
 
@@ -335,11 +370,11 @@ func process(ctx context.Context, c *Client, it item) outcome {
 	now := time.Now().UTC().Format(time.RFC3339)
 	switch it.kind {
 	case "images":
-		res, err := describeImage(ctx, c, strings.TrimPrefix(filepath.Ext(it.path), "."), data)
+		res, cost, err := describeImage(ctx, c, strings.TrimPrefix(filepath.Ext(it.path), "."), data)
 		if err != nil {
-			return outcome{it: it, err: err}
+			return outcome{it: it, costUSD: cost, err: err}
 		}
-		return outcome{it: it, write: func(db *sql.DB) error {
+		return outcome{it: it, costUSD: cost, write: func(db *sql.DB) error {
 			_, err := db.Exec(`INSERT OR REPLACE INTO wa_image_text
 				(rowid, ocr_text, description, language, source, model, generated_at)
 				VALUES (?, ?, ?, '', 'cloud', ?, ?)`,
@@ -347,11 +382,11 @@ func process(ctx context.Context, c *Client, it item) outcome {
 			return err
 		}}
 	case "voice":
-		transcript, err := transcribeVoice(ctx, c, data)
+		transcript, cost, err := transcribeVoice(ctx, c, data)
 		if err != nil {
-			return outcome{it: it, err: err}
+			return outcome{it: it, costUSD: cost, err: err}
 		}
-		return outcome{it: it, write: func(db *sql.DB) error {
+		return outcome{it: it, costUSD: cost, write: func(db *sql.DB) error {
 			_, err := db.Exec(`INSERT OR REPLACE INTO wa_voice_text
 				(rowid, transcript, language, duration_sec, model, generated_at)
 				VALUES (?, ?, '', NULL, ?, ?)`,
@@ -359,11 +394,11 @@ func process(ctx context.Context, c *Client, it item) outcome {
 			return err
 		}}
 	default: // documents
-		res, err := extractDocument(ctx, c, filepath.Base(it.path), data)
+		res, cost, err := extractDocument(ctx, c, filepath.Base(it.path), data)
 		if err != nil {
-			return outcome{it: it, err: err}
+			return outcome{it: it, costUSD: cost, err: err}
 		}
-		return outcome{it: it, write: func(db *sql.DB) error {
+		return outcome{it: it, costUSD: cost, write: func(db *sql.DB) error {
 			_, err := db.Exec(`INSERT OR REPLACE INTO wa_document_text
 				(rowid, text, page_count, method, generated_at)
 				VALUES (?, ?, ?, ?, ?)`,
