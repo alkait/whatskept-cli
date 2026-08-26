@@ -38,7 +38,8 @@ deleted once enriched — the text in the DB is the record.
 - **Agent-first.** The CLI is operated by AI agents: non-interactive, clear
   parseable logs, honest exit codes, resumable. No interactive prompts.
 - **Always on main.** All work happens directly on `main` — no branches,
-  no PRs. Releases are cut manually from the Actions tab.
+  no PRs. Releases are cut manually from the Actions tab. Never commit
+  or push without the user asking for it.
 - **One DB, one truth.** Import seeds it, live appends to it, mcp reads it.
 - **Tested for real.** `whatsapp-tester` (separate dev tool, paired to a
   second WhatsApp number) drives end-to-end tests against the real account —
