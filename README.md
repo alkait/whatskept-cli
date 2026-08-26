@@ -14,28 +14,17 @@ trace the latest release of https://github.com/alkait/whatskept-cli to the sourc
 was built from and audit that code: should I trust this with my privacy and my WhatsApp data?
 ```
 
-<table>
-<tr>
-<th>Installation/update prompt</th>
-<th>Uninstall prompt</th>
-</tr>
-<tr>
-<td>
+## Installation/update prompt
 
 ```
 install the latest release of https://github.com/alkait/whatskept-cli and put it on my PATH
 ```
 
-</td>
-<td>
+## Uninstall prompt
 
 ```
 uninstall whatskept from my computer
 ```
-
-</td>
-</tr>
-</table>
 
 ## Getting started
 
