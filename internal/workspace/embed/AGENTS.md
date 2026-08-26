@@ -84,6 +84,22 @@ environment instead:
 set -a; source .env; set +a; whatskept enrich
 ```
 
+If no `.env` exists, offer to create one (with `chmod 600`) and give
+the user two ways to fill it:
+
+1. **Template** — write the variable names with empty values and let
+   the user fill them in themselves:
+
+   ```
+   WHATSKEPT_BACKUP_PASSWORD=
+   OPENROUTER_API_KEY=
+   WHATSKEPT_MCP_TOKEN=
+   ```
+
+2. **Dictate** — the user hands you the values and you write them into
+   `.env` directly. Write them once, without echoing them back or
+   repeating them anywhere else.
+
 Then look at `settings.json` and the files, and pick the path:
 
 1. **Clean slate** — no `udid`, no `ChatStorage.sqlite` → offer to
@@ -220,10 +236,12 @@ instructions for whichever agent connects.
 
 ## Hard rules
 
-- **Never** read, echo, or store secret values — not from `.env`, not
+- **Never** read, echo, or repeat secret values — not from `.env`, not
   from the user's messages. Listing `.env`'s variable NAMES
   (`cut -d= -f1 .env`) is fine; `cat .env` or printing any value is
-  not. Secrets reach commands only via the environment.
+  not. The ONLY place a user-provided secret may be written is `.env`,
+  when the user asks for that; secrets reach commands only via the
+  environment.
 - **Never start `whatskept enrich` — or any paid API call — without
   the user's explicit go-ahead in the current conversation.** Wanting
   to "check if it works" is not a reason; `whatskept enrich --help`
