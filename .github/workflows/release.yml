@@ -1,11 +1,10 @@
 name: release
 
-# Every push to main cuts a release: v0.1.<run-number> with one binary
-# per platform. Builds are native per-runner (no cross-compiling)
-# because the iOS-backup path needs cgo.
+# Manually triggered from the Actions tab: cuts v0.1.<run-number> with
+# one binary per platform. Builds are native per-runner (no
+# cross-compiling) because the iOS-backup path needs cgo.
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: write
