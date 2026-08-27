@@ -2,8 +2,10 @@
 
 You are operating a **whatskept workspace**: a directory holding one
 searchable copy of the user's WhatsApp history, extracted from an
-encrypted iOS backup. Your job here is to drive the `whatskept` CLI on
-the user's behalf — import their backup, and serve the result over MCP.
+encrypted iOS backup and kept current by live capture. Your job here
+is to drive the `whatskept` CLI on the user's behalf — import their
+backup, capture new messages live, serve the result over MCP, and
+help the user deploy it all on an always-on (24×7) host.
 This file is (re)written by `whatskept init` and always describes what
 the installed binary can do.
 
@@ -16,8 +18,10 @@ already knows.
 ```
 ./ChatStorage.sqlite         # the database — messages, chats, SQL views, FTS index
 ./.whatskept/settings.json   # portable workspace configuration (see below)
+./.whatskept/session.db      # WhatsApp companion-device session (once `live` has linked)
 ./AGENTS.md                  # this guide (the source of truth)
 ./CLAUDE.md                  # one-line stub importing AGENTS.md
+./MEMORY.md                  # your own notes across sessions (see below; may not exist yet)
 ./.unenriched/               # the enrichment queue:
     media/<rowid>.<ext>      #   images awaiting OCR + description
     voice/<rowid>.opus       #   voice notes awaiting transcription
@@ -37,11 +41,24 @@ directories are pending; files under `failed/` are permanently rejected.
 `enrich.log` is your history across runs — one timestamped line per
 event (`run start`, `<kind> <rowid> enriched`, `… transient <reason>
 (still queued)`, `… failed <reason> -> failed/`, `run done
-enriched=… failed=… remaining=…`). Use it to understand what previous
+enriched=… failed=… remaining=…`; lines from live's own trickle
+enrichment read `<kind> <rowid> enriched (live) cost_usd=…`). Use it
+to understand what previous
 runs did, why files are still queued, and to spot patterns (e.g. one
 rowid failing transiently run after run → suggest moving it to
 `failed/` manually). It can grow to tens of thousands of lines — always
 `grep`/`tail` it, never read it whole.
+
+## MEMORY.md — your notes across sessions
+
+A new session starts with no memory of what earlier sessions did.
+`MEMORY.md` is the fix: your own free-form notes, kept in the
+workspace. Read it (if present) before anything else; append to it
+after any significant action or decision — a deployment (host, how to
+reach it, how live is kept running, the endpoint URL), a re-import
+and its date, a choice the user made that should stick. Facts only,
+no secrets, ever. `whatskept init` never touches this file — unlike
+AGENTS.md, it is yours and survives upgrades.
 
 ## settings.json
 
@@ -70,6 +87,10 @@ disagree, this guide is stale: run `whatskept init` here to refresh it,
 then re-read it.
 
 ## First: scan the workspace state
+
+Read `MEMORY.md` first, if it exists — it may already answer where
+things stand (e.g. everything is deployed on a host and this machine
+is only the import station).
 
 Check whether a `.env` file exists and which variables it defines —
 names only, never the values:
@@ -118,10 +139,17 @@ Then look at `settings.json` and the files, and pick the path:
    against the `wa_*_text` tables vs. the queue counts tells you the
    coverage gap precisely.
 4. **`ChatStorage.sqlite` present, `.unenriched/` empty** — fully
-   processed → offer to serve it over MCP (below). Re-importing from a
+   processed → offer to serve it over MCP (below), to keep the
+   history current with live capture (below), or to move the whole
+   thing to an always-on host (below). Re-importing from a
    newer backup of the same device is also fine at any time; it
    replaces the database wholesale, but enrichment results are carried
    forward automatically and already-enriched media is not re-queued.
+
+In any state, also check `.whatskept/session.db`: present means live
+capture has been linked before — `whatskept live` reconnects without a
+QR, so offer to (re)start it if it isn't running. Absent means live
+was never set up; offer it once the database exists.
 
 ## Importing a backup
 
@@ -208,11 +236,31 @@ or unreadable); they need no attention unless the user asks. Every
 attempt is appended to `.unenriched/enrich.log` — grep it to diagnose
 what happened and to advise the user on the next action.
 
+## Capturing live
+
+`whatskept live` links to the user's WhatsApp as a companion device
+and appends new messages to the database as they arrive; media lands
+in the same `.unenriched/` queue as import's. The first run prints a
+QR code — the user scans it from WhatsApp → Linked Devices on the
+phone of the SAME account this workspace is bound to (any other
+account is refused). The session persists in `.whatskept/session.db`;
+later runs reconnect without a QR. Run it in the background: it logs
+every message it writes and a 15-minute heartbeat with queue counts.
+
+If `OPENROUTER_API_KEY` is in live's environment, live also enriches
+**its own captures** as they arrive — a PAID path, so the same
+go-ahead rule as `whatskept enrich` applies before starting live with
+the key. Live never touches queued files from import or earlier
+sessions, however many there are; those always need `whatskept
+enrich`. Without the key, capture still works and media just queues.
+
 ## Serving over MCP
 
-The database is queried through MCP only — do not open
-`ChatStorage.sqlite` directly; the MCP server carries its own query
-instructions for whichever agent connects.
+MCP is how the user's questions about their history get answered:
+the server carries its own query instructions for whichever agent
+connects to it. Your own direct access to `ChatStorage.sqlite` is
+operational only — read-only checks of progress and coverage, never
+content answers, never writes (see Hard rules).
 
 1. Generate a token and start the server (from this directory):
 
@@ -238,6 +286,55 @@ instructions for whichever agent connects.
    https://<random>.trycloudflare.com/<token>/mcp
    ```
 
+## Deploying to an always-on host
+
+Live capture and the MCP server are long-running processes; the user
+will likely want them on a machine that never sleeps. Any host they
+can reach over ssh works — a home server, a VPS — the choice is
+entirely theirs. Offer this once the workspace is imported.
+
+One split is fixed by nature: iOS backups can only be read on THIS
+machine, so this machine remains the import station forever. The host
+owns everything else — `whatskept live` and `whatskept mcp` run
+there, and after the move the host's copy of the workspace is the one
+truth.
+
+Manage the whole process over ssh. The steps, generically:
+
+1. Install the release binary matching the host's OS/architecture
+   (https://github.com/alkait/whatskept-cli/releases) on the host's
+   PATH, and verify with `whatskept -v`.
+2. Copy the workspace directory to the host wholesale — it is fully
+   portable (database, `.whatskept/`, `.unenriched/`, `.env`); rsync
+   is the natural tool. If `.unenriched/` still holds many files,
+   suggest enriching first: enrichment deletes the media, so the
+   copy shrinks from gigabytes to the database alone.
+3. On the host: `whatskept live` (background, kept alive however the
+   user prefers) and `whatskept mcp` — same commands, same
+   environment-variable rules as here.
+4. For the user's AI client, the MCP endpoint needs a URL that
+   outlives reboots — suggest Tailscale as an option; anything the
+   user prefers is fine. The quick tunnel above is for testing, not
+   24×7.
+5. Record the outcome in MEMORY.md: the host and how to reach it,
+   how live is kept running, the endpoint URL, and the date.
+
+Two rules protect the data — these matter more than anything else in
+this section:
+
+- **Live runs in exactly one place.** After the move, never start
+  `whatskept live` here again. Two linked sessions fight over the
+  same connection, and a second import-station copy of the workspace
+  goes stale silently.
+- **Never import into a database that live is writing, and never
+  import against a stale copy.** The re-import cycle for a new
+  backup, strictly in this order: stop live on the host → copy the
+  CURRENT database from the host back here → `whatskept import` here
+  (this is what carries enrichment forward) → copy the workspace back
+  to the host → restart live. Importing over a stale local copy
+  permanently discards every enrichment the host has paid for since
+  the last sync.
+
 ## Hard rules
 
 - **Never** read, echo, or repeat secret values — not from `.env`, not
@@ -245,11 +342,13 @@ instructions for whichever agent connects.
   (`cut -d= -f1 .env`) is fine; `cat .env` or printing any value is
   not. The ONLY place a user-provided secret may be written is `.env`,
   when the user asks for that; secrets reach commands only via the
-  environment.
+  environment. `MEMORY.md` never holds secrets.
 - **Never start `whatskept enrich` — or any paid API call — without
   the user's explicit go-ahead in the current conversation.** Wanting
   to "check if it works" is not a reason; `whatskept enrich --help`
-  and this guide answer that for free.
+  and this guide answer that for free. Starting `whatskept live` with
+  `OPENROUTER_API_KEY` set is a paid path too — same rule; without the
+  key, live is free and just captures.
 - **Never modify the database.** Read-only inspection is fine and
   encouraged for supervising enrichment (`sqlite3 -readonly
   ./ChatStorage.sqlite "..."`), but no INSERT/UPDATE/DELETE/DROP, ever
