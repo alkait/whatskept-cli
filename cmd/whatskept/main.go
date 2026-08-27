@@ -19,6 +19,7 @@ Usage:
   whatskept import <ios-backup-path> import history from an iOS backup
   whatskept import --list            list iOS backups on this machine
   whatskept enrich                   turn queued media into searchable text via OpenRouter [--concurrency n]
+  whatskept live                     capture new messages as they arrive (links via QR on first run)
   whatskept mcp --database <file>    serve a database file over MCP (HTTP) [--addr host:port]
   whatskept -v | --version           show the version
   whatskept -h | --help              show this help
@@ -65,6 +66,11 @@ func main() {
 		}
 	case "enrich":
 		if err := runEnrich(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
+	case "live":
+		if err := runLive(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}

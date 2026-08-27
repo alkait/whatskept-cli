@@ -42,6 +42,13 @@ func SettingsPath(root string) string {
 	return filepath.Join(root, markerDir, "settings.json")
 }
 
+// SessionDBPath returns where `whatskept live` keeps its companion-
+// device session (whatsmeow's store — account credentials, so it lives
+// with the binding in .whatskept/, never in the workspace root).
+func SessionDBPath(root string) string {
+	return filepath.Join(root, markerDir, "session.db")
+}
+
 // Load reads the settings of a workspace.
 func Load(root string) (Settings, error) {
 	var s Settings

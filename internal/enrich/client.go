@@ -150,10 +150,10 @@ func (eb *errorBody) errMetadata() *struct {
 // injectable so tests run against httptest with zero real waiting.
 type Client struct {
 	APIKey     string
-	BaseURL    string                                        // default: the real OpenRouter API
-	HTTPClient *http.Client                                  // default: 5-minute timeout (voice/PDF calls are slow)
+	BaseURL    string                                          // default: the real OpenRouter API
+	HTTPClient *http.Client                                    // default: 5-minute timeout (voice/PDF calls are slow)
 	Sleep      func(ctx context.Context, d time.Duration) bool // default: real sleep; false = ctx cancelled
-	MaxRetries int                                           // attempts per call, default 5
+	MaxRetries int                                             // attempts per call, default 5
 }
 
 func (c *Client) baseURL() string {

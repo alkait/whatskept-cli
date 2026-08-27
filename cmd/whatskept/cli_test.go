@@ -72,6 +72,26 @@ func TestCLIVersion(t *testing.T) {
 	}
 }
 
+func TestCLILiveRequiresWorkspace(t *testing.T) {
+	code, _, stderr := run(t, t.TempDir(), "live")
+	if code != 1 {
+		t.Fatalf("exit %d, want 1", code)
+	}
+	if !strings.Contains(stderr, "not a whatskept workspace") {
+		t.Errorf("stderr = %q", stderr)
+	}
+}
+
+func TestCLILiveInUsage(t *testing.T) {
+	code, stdout, _ := run(t, t.TempDir(), "--help")
+	if code != 0 {
+		t.Fatalf("exit %d, want 0", code)
+	}
+	if !strings.Contains(stdout, "whatskept live") {
+		t.Errorf("usage missing live: %q", stdout)
+	}
+}
+
 func TestCLIInit(t *testing.T) {
 	dir := t.TempDir()
 	code, stdout, _ := run(t, dir, "init", "ws1")

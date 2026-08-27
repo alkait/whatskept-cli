@@ -451,9 +451,9 @@ func readLog(t *testing.T, root string) string {
 // every outcome, timestamped, appended across runs.
 func TestRunWritesAttemptLog(t *testing.T) {
 	root := writeWorkspace(t, 1, 2, 3)
-	writeQueued(t, root, "media", "1.jpg")   // will be flagged → failed/
-	writeQueued(t, root, "voice", "2.opus")  // will succeed
-	writeQueued(t, root, "media", "99.jpg")  // orphan
+	writeQueued(t, root, "media", "1.jpg")  // will be flagged → failed/
+	writeQueued(t, root, "voice", "2.opus") // will succeed
+	writeQueued(t, root, "media", "99.jpg") // orphan
 	var calls atomic.Int64
 	c, _ := newTestClient(t, 200, func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
