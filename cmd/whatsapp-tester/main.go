@@ -34,8 +34,16 @@ import (
 const usage = `whatsapp-tester — send real WhatsApp messages for e2e tests.
 
 Usage:
-  whatsapp-tester pair                     link the tester's (second) number via QR
-  whatsapp-tester send-text <jid> <text>   send a text message, print its stanza ID
+  whatsapp-tester pair                          link the tester's (second) number via QR
+  whatsapp-tester send-text <jid> <text>        send a text message, print its stanza ID
+  whatsapp-tester reply <jid> <target> <text>   reply to an earlier message
+  whatsapp-tester edit <jid> <target> <text>    rewrite an earlier message's text
+  whatsapp-tester revoke <jid> <target>         delete an earlier message for everyone
+  whatsapp-tester send-image <jid> <file> [caption]   send an image
+  whatsapp-tester send-voice <jid> <file>       send a voice note (ogg opus)
+  whatsapp-tester send-pdf <jid> <file>         send a PDF document
+
+<target> is the stanza ID a previous send printed.
 
 Flags:
   --store <file>   session store (default e2e-test/session.db)
@@ -62,6 +70,46 @@ func main() {
 			os.Exit(2)
 		}
 		err = runSendText(ctx, args[1], args[2])
+	case "reply":
+		if len(args) != 4 {
+			fmt.Fprint(os.Stderr, "reply requires <jid> <target> <text>\n\n"+usage)
+			os.Exit(2)
+		}
+		err = runReply(ctx, args[1], args[2], args[3])
+	case "edit":
+		if len(args) != 4 {
+			fmt.Fprint(os.Stderr, "edit requires <jid> <target> <text>\n\n"+usage)
+			os.Exit(2)
+		}
+		err = runEdit(ctx, args[1], args[2], args[3])
+	case "revoke":
+		if len(args) != 3 {
+			fmt.Fprint(os.Stderr, "revoke requires <jid> <target>\n\n"+usage)
+			os.Exit(2)
+		}
+		err = runRevoke(ctx, args[1], args[2])
+	case "send-image":
+		if len(args) != 3 && len(args) != 4 {
+			fmt.Fprint(os.Stderr, "send-image requires <jid> <file> [caption]\n\n"+usage)
+			os.Exit(2)
+		}
+		caption := ""
+		if len(args) == 4 {
+			caption = args[3]
+		}
+		err = runSendImage(ctx, args[1], args[2], caption)
+	case "send-voice":
+		if len(args) != 3 {
+			fmt.Fprint(os.Stderr, "send-voice requires <jid> <file>\n\n"+usage)
+			os.Exit(2)
+		}
+		err = runSendVoice(ctx, args[1], args[2])
+	case "send-pdf":
+		if len(args) != 3 {
+			fmt.Fprint(os.Stderr, "send-pdf requires <jid> <file>\n\n"+usage)
+			os.Exit(2)
+		}
+		err = runSendPDF(ctx, args[1], args[2])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n\n%s", args[0], usage)
 		os.Exit(2)
@@ -192,4 +240,148 @@ func runSendText(ctx context.Context, jid, text string) error {
 	// asserts (and later edits/revokes) by this key.
 	fmt.Printf("sent id=%s ts=%s\n", resp.ID, resp.Timestamp.UTC().Format(time.RFC3339))
 	return nil
+}
+
+func runReply(ctx context.Context, jid, targetID, text string) error {
+	to, err := types.ParseJID(jid)
+	if err != nil {
+		return fmt.Errorf("parse jid %q: %w", jid, err)
+	}
+	client, err := connect(ctx)
+	if err != nil {
+		return err
+	}
+	defer client.Disconnect()
+	// The quote context needs the quoted message's sender and a body;
+	// the tester only ever replies to its own messages, and receivers
+	// don't verify the quoted body, so a placeholder suffices.
+	msg := &waE2E.Message{ExtendedTextMessage: &waE2E.ExtendedTextMessage{
+		Text: proto.String(text),
+		ContextInfo: &waE2E.ContextInfo{
+			StanzaID:      proto.String(targetID),
+			Participant:   proto.String(client.Store.ID.ToNonAD().String()),
+			QuotedMessage: &waE2E.Message{Conversation: proto.String("(quoted)")},
+		},
+	}}
+	resp, err := client.SendMessage(ctx, to, msg)
+	if err != nil {
+		return fmt.Errorf("send reply: %w", err)
+	}
+	fmt.Printf("sent id=%s target=%s\n", resp.ID, targetID)
+	return nil
+}
+
+func runEdit(ctx context.Context, jid, targetID, text string) error {
+	to, err := types.ParseJID(jid)
+	if err != nil {
+		return fmt.Errorf("parse jid %q: %w", jid, err)
+	}
+	client, err := connect(ctx)
+	if err != nil {
+		return err
+	}
+	defer client.Disconnect()
+	edited := client.BuildEdit(to, types.MessageID(targetID), &waE2E.Message{Conversation: proto.String(text)})
+	resp, err := client.SendMessage(ctx, to, edited)
+	if err != nil {
+		return fmt.Errorf("send edit: %w", err)
+	}
+	fmt.Printf("edited id=%s target=%s\n", resp.ID, targetID)
+	return nil
+}
+
+func runRevoke(ctx context.Context, jid, targetID string) error {
+	to, err := types.ParseJID(jid)
+	if err != nil {
+		return fmt.Errorf("parse jid %q: %w", jid, err)
+	}
+	client, err := connect(ctx)
+	if err != nil {
+		return err
+	}
+	defer client.Disconnect()
+	resp, err := client.SendMessage(ctx, to, client.BuildRevoke(to, types.EmptyJID, types.MessageID(targetID)))
+	if err != nil {
+		return fmt.Errorf("send revoke: %w", err)
+	}
+	fmt.Printf("revoked id=%s target=%s\n", resp.ID, targetID)
+	return nil
+}
+
+// sendMedia uploads a file's bytes and sends msg (whose media fields
+// the caller filled from the upload response via build).
+func sendMedia(ctx context.Context, jid, file string, mediaType whatsmeow.MediaType,
+	build func(whatsmeow.UploadResponse, []byte) *waE2E.Message) error {
+	to, err := types.ParseJID(jid)
+	if err != nil {
+		return fmt.Errorf("parse jid %q: %w", jid, err)
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return err
+	}
+	client, err := connect(ctx)
+	if err != nil {
+		return err
+	}
+	defer client.Disconnect()
+	up, err := client.Upload(ctx, data, mediaType)
+	if err != nil {
+		return fmt.Errorf("upload: %w", err)
+	}
+	resp, err := client.SendMessage(ctx, to, build(up, data))
+	if err != nil {
+		return fmt.Errorf("send: %w", err)
+	}
+	fmt.Printf("sent id=%s ts=%s\n", resp.ID, resp.Timestamp.UTC().Format(time.RFC3339))
+	return nil
+}
+
+func runSendImage(ctx context.Context, jid, file, caption string) error {
+	return sendMedia(ctx, jid, file, whatsmeow.MediaImage, func(up whatsmeow.UploadResponse, data []byte) *waE2E.Message {
+		m := &waE2E.ImageMessage{
+			Mimetype:      proto.String("image/jpeg"),
+			URL:           proto.String(up.URL),
+			DirectPath:    proto.String(up.DirectPath),
+			MediaKey:      up.MediaKey,
+			FileEncSHA256: up.FileEncSHA256,
+			FileSHA256:    up.FileSHA256,
+			FileLength:    proto.Uint64(uint64(len(data))),
+		}
+		if caption != "" {
+			m.Caption = proto.String(caption)
+		}
+		return &waE2E.Message{ImageMessage: m}
+	})
+}
+
+func runSendVoice(ctx context.Context, jid, file string) error {
+	return sendMedia(ctx, jid, file, whatsmeow.MediaAudio, func(up whatsmeow.UploadResponse, data []byte) *waE2E.Message {
+		return &waE2E.Message{AudioMessage: &waE2E.AudioMessage{
+			PTT:           proto.Bool(true), // voice note, not shared audio
+			Mimetype:      proto.String("audio/ogg; codecs=opus"),
+			Seconds:       proto.Uint32(2),
+			URL:           proto.String(up.URL),
+			DirectPath:    proto.String(up.DirectPath),
+			MediaKey:      up.MediaKey,
+			FileEncSHA256: up.FileEncSHA256,
+			FileSHA256:    up.FileSHA256,
+			FileLength:    proto.Uint64(uint64(len(data))),
+		}}
+	})
+}
+
+func runSendPDF(ctx context.Context, jid, file string) error {
+	return sendMedia(ctx, jid, file, whatsmeow.MediaDocument, func(up whatsmeow.UploadResponse, data []byte) *waE2E.Message {
+		return &waE2E.Message{DocumentMessage: &waE2E.DocumentMessage{
+			FileName:      proto.String(filepath.Base(file)),
+			Mimetype:      proto.String("application/pdf"),
+			URL:           proto.String(up.URL),
+			DirectPath:    proto.String(up.DirectPath),
+			MediaKey:      up.MediaKey,
+			FileEncSHA256: up.FileEncSHA256,
+			FileSHA256:    up.FileSHA256,
+			FileLength:    proto.Uint64(uint64(len(data))),
+		}}
+	})
 }
