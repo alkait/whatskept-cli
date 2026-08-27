@@ -31,6 +31,24 @@ func mergeForward(livePath, tempPath string) error {
 	if _, err := db.Exec(`ATTACH DATABASE ? AS old`, livePath); err != nil {
 		return fmt.Errorf("attach live db: %w", err)
 	}
+	// Rows written by `whatskept live` carry locally assigned rowids;
+	// after a re-import the same number belongs to a DIFFERENT message
+	// (the phone re-delivers live-captured messages under its own
+	// numbering). Carrying their enrichment forward would attach text
+	// to the wrong rows, so those are dropped — the wa_live_pk ledger
+	// says which they are. The ledger itself is not carried either: a
+	// fresh import contains only the phone's own rows.
+	liveExclusion := ""
+	var hasLedger int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM old.sqlite_master WHERE type = 'table' AND name = 'wa_live_pk'`,
+	).Scan(&hasLedger); err != nil {
+		return fmt.Errorf("check wa_live_pk: %w", err)
+	}
+	if hasLedger > 0 {
+		liveExclusion = ` AND rowid NOT IN (SELECT pk FROM old.wa_live_pk)`
+	}
+
 	for _, table := range enrichmentTables {
 		var ddl string
 		err := db.QueryRow(
@@ -49,7 +67,7 @@ func mergeForward(livePath, tempPath string) error {
 		}
 		if _, err := db.Exec(fmt.Sprintf(
 			`INSERT INTO main.%[1]s SELECT * FROM old.%[1]s
-			 WHERE rowid IN (SELECT Z_PK FROM main.ZWAMESSAGE)`, table)); err != nil {
+			 WHERE rowid IN (SELECT Z_PK FROM main.ZWAMESSAGE)`+liveExclusion, table)); err != nil {
 			return fmt.Errorf("copy %s rows: %w", table, err)
 		}
 	}

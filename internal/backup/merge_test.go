@@ -63,6 +63,46 @@ func TestMergeForwardCarriesEnrichment(t *testing.T) {
 	}
 }
 
+// Enrichment attached to live-captured rows must NOT carry forward: a
+// live-assigned rowid means a different message in the fresh import.
+// The wa_live_pk ledger itself must not carry either.
+func TestMergeForwardSkipsLivePKs(t *testing.T) {
+	dir := t.TempDir()
+	live := filepath.Join(dir, "live.sqlite")
+	temp := filepath.Join(dir, "temp.sqlite")
+	writeDB(t, live, voiceTextDDL+`
+		CREATE TABLE wa_live_pk (pk INTEGER PRIMARY KEY);
+		INSERT INTO wa_live_pk VALUES (2);
+		INSERT INTO wa_voice_text VALUES (1, 'from backup', '', NULL, 'm', 't');
+		INSERT INTO wa_voice_text VALUES (2, 'live capture', '', NULL, 'm', 't');`)
+	// The fresh import re-delivers the live-captured message — rowid 2
+	// exists but is a DIFFERENT message now.
+	writeDB(t, temp, `
+		CREATE TABLE ZWAMESSAGE (Z_PK INTEGER PRIMARY KEY);
+		INSERT INTO ZWAMESSAGE VALUES (1), (2);`)
+
+	if err := mergeForward(live, temp); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := sql.Open("sqlite", temp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM wa_voice_text`).Scan(&n); err != nil || n != 1 {
+		t.Errorf("voice rows = %d, want 1 (live row's enrichment dropped)", n)
+	}
+	var transcript string
+	if err := db.QueryRow(`SELECT transcript FROM wa_voice_text WHERE rowid = 1`).Scan(&transcript); err != nil || transcript != "from backup" {
+		t.Errorf("voice row 1: %q, %v", transcript, err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE name = 'wa_live_pk'`).Scan(&n); err != nil || n != 0 {
+		t.Errorf("wa_live_pk carried into staging DB (n=%d)", n)
+	}
+}
+
 func TestMergeForwardNoEnrichmentTables(t *testing.T) {
 	dir := t.TempDir()
 	live := filepath.Join(dir, "live.sqlite")
