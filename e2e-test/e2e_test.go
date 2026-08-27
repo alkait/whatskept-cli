@@ -35,7 +35,16 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var workspaceFlag = flag.String("workspace", "", "whatskept workspace `whatskept live` is running in")
+var (
+	workspaceFlag = flag.String("workspace", "", "whatskept workspace `whatskept live` is running in")
+
+	// -enrich declares that live is running WITH OPENROUTER_API_KEY.
+	// It gates the paid enrichment tests on, and relaxes the
+	// queued-file assertions in the capture tests (the enricher
+	// consumes queue files within seconds, so their presence can no
+	// longer be asserted).
+	enrichFlag = flag.Bool("enrich", false, "live is running with OPENROUTER_API_KEY: run the paid enrichment tests")
+)
 
 type config struct {
 	// Workspace is the whatskept workspace under test; assertions read
@@ -242,9 +251,14 @@ func sendMedia(t *testing.T, cfg config, subcmd, fixture string, extra ...string
 }
 
 // assertQueuedFile checks the captured blob sits in the enrichment
-// queue with exactly the fixture's bytes.
+// queue with exactly the fixture's bytes. Skipped under -enrich: the
+// enricher may have already consumed the file (that consumption is
+// asserted by the enrichment tests instead).
 func assertQueuedFile(t *testing.T, cfg config, rel, fixture string) {
 	t.Helper()
+	if *enrichFlag {
+		return
+	}
 	got, err := os.ReadFile(filepath.Join(cfg.Workspace, rel))
 	if err != nil {
 		t.Fatalf("queued file: %v", err)
@@ -321,6 +335,9 @@ func TestPDFCaptured(t *testing.T) {
 // TestImageRevokeCleans: revoking a captured image tombstones the row
 // AND removes the queued file.
 func TestImageRevokeCleans(t *testing.T) {
+	if *enrichFlag {
+		t.Skip("premise is an unconsumed queue file — run without -enrich (revoke-of-enriched is covered by TestImageEnrichedThenRevoked)")
+	}
 	cfg := loadConfig(t)
 	stanza := sendMedia(t, cfg, "send-image", "image.jpg")
 	db := openWorkspaceDB(t, cfg)
@@ -341,6 +358,131 @@ func TestImageRevokeCleans(t *testing.T) {
 	})
 	if _, err := os.Stat(queued); !os.IsNotExist(err) {
 		t.Errorf("queued file still present after revoke: %v", err)
+	}
+}
+
+// requireEnrich gates the paid enrichment tests behind -enrich.
+func requireEnrich(t *testing.T) {
+	t.Helper()
+	if !*enrichFlag {
+		t.Skip("paid enrichment test — run with -enrich while live has OPENROUTER_API_KEY")
+	}
+}
+
+// waitEnriched polls until the enrichment row for pk exists in table,
+// then asserts the queue file is gone (enrichment deletes on success).
+func waitEnriched(t *testing.T, cfg config, db *sql.DB, table string, pk int64, queueRel string) {
+	t.Helper()
+	waitFor(t, table+" enrichment for pk", func() bool {
+		var n int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM `+table+` WHERE rowid = ?`, pk).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n == 1
+	})
+	if _, err := os.Stat(filepath.Join(cfg.Workspace, queueRel)); !os.IsNotExist(err) {
+		t.Errorf("queue file still present after enrichment: %v", err)
+	}
+}
+
+// TestImageEnrichedThenRevoked: the full paid loop — a captured image
+// is described within seconds (doorbell, not backstop), its FTS row
+// folds the new text while keeping the caption, and a later revoke
+// removes the derived text again.
+func TestImageEnrichedThenRevoked(t *testing.T) {
+	requireEnrich(t)
+	cfg := loadConfig(t)
+	caption := fmt.Sprintf("whatskept e2e enrich %d", time.Now().UnixNano())
+	stanza := sendMedia(t, cfg, "send-image", "image.jpg", caption)
+	db := openWorkspaceDB(t, cfg)
+	pk := waitForRow(t, db, stanza)
+
+	waitEnriched(t, cfg, db, "wa_image_text", pk, filepath.Join(".unenriched", "media", fmt.Sprintf("%d.jpg", pk)))
+	var desc string
+	if err := db.QueryRow(`SELECT description FROM wa_image_text WHERE rowid = ?`, pk).Scan(&desc); err != nil {
+		t.Fatal(err)
+	}
+	if desc == "" {
+		t.Error("description is empty")
+	}
+	t.Logf("description: %s", desc)
+	var fts string
+	if err := db.QueryRow(`SELECT text FROM messages_fts WHERE rowid = ?`, pk).Scan(&fts); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(fts, caption) {
+		t.Errorf("fts lost the caption: %q", fts)
+	}
+	if strings.TrimSpace(strings.ReplaceAll(fts, caption, "")) == "" {
+		t.Errorf("fts has no enrichment text beyond the caption: %q", fts)
+	}
+
+	// Revoke the enriched message: derived text must go too.
+	tester(t, "revoke", cfg.Chat, stanza)
+	waitFor(t, "revoke of enriched image", func() bool {
+		var msgType int
+		if err := db.QueryRow(`SELECT ZMESSAGETYPE FROM ZWAMESSAGE WHERE Z_PK = ?`, pk).Scan(&msgType); err != nil {
+			t.Fatal(err)
+		}
+		return msgType == 14
+	})
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM wa_image_text WHERE rowid = ?`, pk).Scan(&n); err != nil || n != 0 {
+		t.Errorf("wa_image_text after revoke = %d, %v", n, err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM messages_fts WHERE rowid = ?`, pk).Scan(&n); err != nil || n != 0 {
+		t.Errorf("fts after revoke = %d, %v", n, err)
+	}
+}
+
+// TestVoiceEnriched: the spoken fixture comes back as a transcript.
+func TestVoiceEnriched(t *testing.T) {
+	requireEnrich(t)
+	cfg := loadConfig(t)
+	stanza := sendMedia(t, cfg, "send-voice", "voice.opus")
+	db := openWorkspaceDB(t, cfg)
+	pk := waitForRow(t, db, stanza)
+
+	waitEnriched(t, cfg, db, "wa_voice_text", pk, filepath.Join(".unenriched", "voice", fmt.Sprintf("%d.opus", pk)))
+	var transcript string
+	if err := db.QueryRow(`SELECT transcript FROM wa_voice_text WHERE rowid = ?`, pk).Scan(&transcript); err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(transcript) == "" {
+		t.Error("transcript is empty")
+	}
+	t.Logf("transcript: %s", transcript)
+	// The fixture says "hello, this is the whatskept end to end test
+	// voice note" — expect at least one distinctive word to survive.
+	if lower := strings.ToLower(transcript); !strings.Contains(lower, "hello") && !strings.Contains(lower, "test") {
+		t.Errorf("transcript unrecognizable: %q", transcript)
+	}
+}
+
+// TestPDFEnriched: the stamped text layer is extracted and searchable.
+func TestPDFEnriched(t *testing.T) {
+	requireEnrich(t)
+	cfg := loadConfig(t)
+	stanza := sendMedia(t, cfg, "send-pdf", "doc.pdf")
+	db := openWorkspaceDB(t, cfg)
+	pk := waitForRow(t, db, stanza)
+
+	waitEnriched(t, cfg, db, "wa_document_text", pk, filepath.Join(".unenriched", "documents", fmt.Sprintf("%d.pdf", pk)))
+	var text string
+	if err := db.QueryRow(`SELECT text FROM wa_document_text WHERE rowid = ?`, pk).Scan(&text); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("extracted: %s", text)
+	if !strings.Contains(strings.ToLower(text), "whatskept") {
+		t.Errorf("stamped text not extracted: %q", text)
+	}
+	// And it is searchable: the FTS row folds the document text.
+	var fts string
+	if err := db.QueryRow(`SELECT text FROM messages_fts WHERE rowid = ?`, pk).Scan(&fts); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.ToLower(fts), "whatskept") {
+		t.Errorf("fts missing document text: %q", fts)
 	}
 }
 
