@@ -112,6 +112,14 @@ func Run(ctx context.Context, root string) error {
 		return err
 	}
 
+	// Trickle enrichment: on only when the key is present; strictly
+	// this session's captures. Starting live with the key IS the
+	// consent — the backlog stays untouched regardless.
+	enr, err := startEnricher(ctx, root, dbPath)
+	if err != nil {
+		return err
+	}
+
 	// applyMsg writes one message event and returns a log suffix saying
 	// what happened. Runs inside whatsmeow's event dispatch, which is
 	// serial — the writer never races itself.
@@ -128,6 +136,10 @@ func Run(ctx context.Context, root string) error {
 			s := fmt.Sprintf(" write=insert pk=%d chat=%d", res.PK, res.ChatPK)
 			if res.MediaPath != "" {
 				s += " file=" + res.MediaPath
+				// Enrich now rather than at the next backstop tick.
+				// Non-blocking: the event handler never waits on a
+				// model call.
+				enr.Nudge()
 			}
 			if res.NewChat {
 				// Worth seeing: a new session per message would mean
@@ -277,9 +289,10 @@ func Run(ctx context.Context, root string) error {
 				} else if since := connectedAt.Load(); since > 0 {
 					state = fmt.Sprintf("connected for %s", time.Since(time.Unix(since, 0)).Round(time.Second))
 				}
-				logf("heartbeat: %s | messages=%d connects=%d disconnects=%d | wrote=%d edits=%d revokes=%d skipped=%d errors=%d",
+				logf("heartbeat: %s | messages=%d connects=%d disconnects=%d | wrote=%d edits=%d revokes=%d skipped=%d errors=%d | queued=%d%s",
 					state, msgCount.Load(), connects.Load(), disconnects.Load(),
-					inserted.Load(), edited.Load(), revoked.Load(), skipped.Load(), writeErrs.Load())
+					inserted.Load(), edited.Load(), revoked.Load(), skipped.Load(), writeErrs.Load(),
+					queueSize(root), enr.status())
 			}
 		}
 	}()
