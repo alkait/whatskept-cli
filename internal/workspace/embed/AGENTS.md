@@ -103,6 +103,13 @@ Read `MEMORY.md` first, if it exists — it may already answer where
 things stand (e.g. everything is deployed on a host and this machine
 is only the import station).
 
+Check for updates: compare `whatskept -v` against the latest release
+at https://github.com/alkait/whatskept-cli/releases (`dev` means a
+source build — skip the check). If newer, offer to update: replace
+the binary, re-run `whatskept init` to refresh this guide, and
+restart any running `live` or `mcp` — on a deployed host too. Never
+update unprompted.
+
 Check whether a `.env` file exists and which variables it defines —
 names only, never the values:
 
