@@ -20,6 +20,8 @@ jobs:
             artifact: whatskept-windows-amd64.exe
           - os: ubuntu-24.04-arm # Raspberry Pi 3/4/5 (64-bit OS)
             artifact: whatskept-linux-arm64
+          - os: ubuntu-latest # x86 VPS / home server
+            artifact: whatskept-linux-amd64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
