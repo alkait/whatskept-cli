@@ -41,8 +41,9 @@ directories are pending; files under `failed/` are permanently rejected.
 `enrich.log` is your history across runs — one timestamped line per
 event (`run start`, `<kind> <rowid> enriched`, `… transient <reason>
 (still queued)`, `… failed <reason> -> failed/`, `run done
-enriched=… failed=… remaining=…`; lines from live's own trickle
-enrichment read `<kind> <rowid> enriched (live) cost_usd=…`). Use it
+enriched=… failed=… remaining=…`; lines from live's own
+as-it-arrives enrichment read `<kind> <rowid> enriched (live)
+cost_usd=…`). Use it
 to understand what previous
 runs did, why files are still queued, and to spot patterns (e.g. one
 rowid failing transiently run after run → suggest moving it to
@@ -59,6 +60,16 @@ reach it, how live is kept running, the endpoint URL), a re-import
 and its date, a choice the user made that should stick. Facts only,
 no secrets, ever. `whatskept init` never touches this file — unlike
 AGENTS.md, it is yours and survives upgrades.
+
+Record only what the workspace cannot tell you: hosts and how to
+reach them, endpoints, decisions, and past events with their dates.
+Never record current state — queue counts, balances, whether
+something is running — the workspace answers those directly and a
+written copy is stale the moment the next message arrives. If a
+number belongs in a note, phrase it as a dated past event
+("2026-08-27: enrichment run processed 39,214 files"), never as the
+present. When reading: MEMORY.md is leads, not facts — re-check
+anything checkable before stating it to the user.
 
 ## settings.json
 
@@ -139,9 +150,9 @@ Then look at `settings.json` and the files, and pick the path:
    against the `wa_*_text` tables vs. the queue counts tells you the
    coverage gap precisely.
 4. **`ChatStorage.sqlite` present, `.unenriched/` empty** — fully
-   processed → offer to serve it over MCP (below), to keep the
-   history current with live capture (below), or to move the whole
-   thing to an always-on host (below). Re-importing from a
+   processed → offer the choice: run MCP + live here, or deploy both
+   to an always-on host (see "After enrichment: choose where it
+   runs"). Re-importing from a
    newer backup of the same device is also fine at any time; it
    replaces the database wholesale, but enrichment results are carried
    forward automatically and already-enriched media is not re-queued.
@@ -165,8 +176,17 @@ was never set up; offer it once the database exists.
    workspace is already bound, use the backup whose directory name
    equals the bound `udid` — any other will be refused.
 
-2. Ask the user for their iOS backup password. Pass it inline as an
-   environment variable — never store it, never echo it back:
+   Check the backup's date. If it is more than 24 hours old, suggest
+   taking a fresh backup first, and explain why: an import carries
+   only what the backup contains, so everything sent since that date
+   stays missing until a newer backup is imported — live capture
+   (below) only covers from the moment it links onward, so the gap
+   between an old backup and today never fills itself.
+
+2. The import reads `WHATSKEPT_BACKUP_PASSWORD` (the iOS backup
+   password) from its environment. If `.env` already defines it,
+   source it as shown above; only otherwise ask the user for it and
+   pass it inline — never stored, never echoed back:
 
    ```
    WHATSKEPT_BACKUP_PASSWORD=<password> whatskept import <backup-path>
@@ -236,6 +256,22 @@ or unreadable); they need no attention unless the user asks. Every
 attempt is appended to `.unenriched/enrich.log` — grep it to diagnose
 what happened and to advise the user on the next action.
 
+## After enrichment: choose where it runs
+
+From here there are exactly two processes left — live capture and the
+MCP server — and one decision: which machine runs them. Present it as
+a choice, never as a sequence of steps:
+
+- **Run here** — start MCP and live on this machine (sections below).
+  Right for trying things out, or when this machine is always on
+  anyway.
+- **Deploy** — move the workspace to an always-on host and run both
+  there from the start (see Deploying). Nothing needs to be set up or
+  "tested" here first; the same commands work the same way there.
+
+A local trial can always graduate to a deployment later — the
+workspace moves wholesale.
+
 ## Capturing live
 
 `whatskept live` links to the user's WhatsApp as a companion device
@@ -247,12 +283,19 @@ account is refused). The session persists in `.whatskept/session.db`;
 later runs reconnect without a QR. Run it in the background: it logs
 every message it writes and a 15-minute heartbeat with queue counts.
 
-If `OPENROUTER_API_KEY` is in live's environment, live also enriches
-**its own captures** as they arrive — a PAID path, so the same
-go-ahead rule as `whatskept enrich` applies before starting live with
-the key. Live never touches queued files from import or earlier
+Before starting live — here or on a host — ask the user which mode
+they want; don't silently default to either:
+
+- **Capture-only** (free): media queues in `.unenriched/` until a
+  `whatskept enrich` run. The right suggestion when the user has no
+  preference — nothing is lost, media just waits.
+- **Enrich-as-it-goes** (paid): live runs with `OPENROUTER_API_KEY`
+  in its environment and enriches **its own captures** on arrival.
+  Choosing this answer IS the go-ahead the paid-path rule requires.
+
+Either way, live never touches queued files from import or earlier
 sessions, however many there are; those always need `whatskept
-enrich`. Without the key, capture still works and media just queues.
+enrich`.
 
 ## Serving over MCP
 
@@ -291,7 +334,12 @@ content answers, never writes (see Hard rules).
 Live capture and the MCP server are long-running processes; the user
 will likely want them on a machine that never sleeps. Any host they
 can reach over ssh works — a home server, a VPS — the choice is
-entirely theirs. Offer this once the workspace is imported.
+entirely theirs. If they have no host, suggest DigitalOcean as an
+option (ssh-first, and its `doctl` CLI lets you drive provisioning
+yourself given an API token — creating a server costs money, so the
+paid go-ahead rule applies). Offer this once the workspace is
+imported — deployment does not require MCP or live to have ever been
+started on this machine.
 
 One split is fixed by nature: iOS backups can only be read on THIS
 machine, so this machine remains the import station forever. The host
@@ -310,8 +358,9 @@ Manage the whole process over ssh. The steps, generically:
    suggest enriching first: enrichment deletes the media, so the
    copy shrinks from gigabytes to the database alone.
 3. On the host: `whatskept live` (background, kept alive however the
-   user prefers) and `whatskept mcp` — same commands, same
-   environment-variable rules as here.
+   user prefers — ask the capture-only vs. enrich-as-it-goes question
+   from "Capturing live" before starting it) and `whatskept mcp` —
+   same commands, same environment-variable rules as here.
 4. For the user's AI client, the MCP endpoint needs a URL that
    outlives reboots — suggest Tailscale as an option; anything the
    user prefers is fine. The quick tunnel above is for testing, not
