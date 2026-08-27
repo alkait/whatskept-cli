@@ -8,8 +8,9 @@ whatskept-live. No GUI. No backup/restore features. No deployment concerns.
 Everything lives in a workspace — a directory marked by a `.whatskept/`
 directory, created with `whatskept init [dir]`. Every command works
 inside one, except `mcp`, which addresses the database file explicitly.
-`.whatskept/` contains only `settings.json`: portable configuration,
-including the device/account binding. All other state (the shared
+`.whatskept/` contains `settings.json` — portable configuration,
+including the device/account binding — and, once `live` has linked,
+`session.db` (the companion-device session). All other state (the shared
 SQLite database, etc.) sits at the workspace root. Secrets come from
 `.env` or the environment, never from settings:
 
@@ -41,9 +42,10 @@ deleted once enriched — the text in the DB is the record.
   no PRs. Releases are cut manually from the Actions tab. Never commit
   or push without the user asking for it.
 - **One DB, one truth.** Import seeds it, live appends to it, mcp reads it.
-- **Tested for real.** `whatsapp-tester` (separate dev tool, paired to a
-  second WhatsApp number) drives end-to-end tests against the real account —
-  no asking a human to send messages.
+- **Tested for real.** `whatsapp-tester` (in-repo dev tool at
+  `cmd/whatsapp-tester`, paired to a second WhatsApp number, never released)
+  drives end-to-end tests against the real account — no asking a human to
+  send messages.
 
 ## Testing pattern
 
@@ -55,5 +57,11 @@ Every feature is covered the same way, all under one `go test ./...`:
 - **Fake the external world** — features that depend on it get fakes:
   fixture backups in `testdata/`, a local `httptest` stand-in for the
   enrichment API. No test needs a phone, a key, or the network.
-- **Real e2e is gated** — `whatsapp-tester` runs only when explicitly
-  enabled; plain `go test ./...` stays green on any machine.
+- **Real e2e is gated** — the suite in `e2e-test/` sits behind the `e2e`
+  build tag and runs only on explicit request:
+  `go test -tags e2e ./e2e-test -workspace <dir>`. It needs the tester's
+  paired session (`e2e-test/session.db`, gitignored) and `whatskept live`
+  running in that workspace; the destination number is derived from the
+  workspace binding — e2e traffic is strictly between the tester number
+  and the workspace account, in chats the suite creates. Plain
+  `go test ./...` never touches it and stays green on any machine.
