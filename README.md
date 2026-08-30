@@ -14,33 +14,25 @@ trace the latest release of https://github.com/alkait/whatskept-cli to the sourc
 was built from and audit that code: should I trust this with my privacy and my WhatsApp data?
 ```
 
-## Installation/update prompt
+## Installation and getting started prompt
 
 ```
-install the latest release of https://github.com/alkait/whatskept-cli and put it on my PATH
+install the latest release of https://github.com/alkait/whatskept-cli and put it on my PATH.
+When done, ask me one question — where my workspace is, or where I'd like a new one —
+then tell me to continue in a new terminal and print the matching command with my path
+filled in:
+
+  New workspace:      mkdir -p <path> && cd <path> && whatskept init && claude "Hi"
+  Existing workspace: cd <path> && claude "Hi"
 ```
+
+After saying "Hi", or really anything, the agent takes over and guides you through the steps 😊
 
 ## Uninstall prompt
 
 ```
 uninstall whatskept from my computer
 ```
-
-## Getting started
-
-New workspace:
-
-```
-mkdir my-whatsapp && cd my-whatsapp && whatskept init && claude "Hi"
-```
-
-Existing workspace:
-
-```
-cd my-whatsapp && claude "Hi"
-```
-
-After saying "Hi", or really any thing the the agent takes over and guides you through the steps 😊
 
 ## Dev
 
