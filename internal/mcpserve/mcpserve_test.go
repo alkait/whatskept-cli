@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"whatskept/internal/live"
 	"whatskept/internal/views"
 )
 
@@ -221,5 +223,88 @@ func TestServeRequiresToken(t *testing.T) {
 	err := Serve(context.Background(), writeFixtureDB(t), "127.0.0.1:0", "")
 	if err == nil || !strings.Contains(err.Error(), TokenEnv) {
 		t.Errorf("err = %v, want mention of %s", err, TokenEnv)
+	}
+}
+
+// writeSendWorkspace grows the fixture into something live can write
+// to: the columns its writer fills, and the .whatskept/ directory its
+// send endpoint is advertised in.
+func writeSendWorkspace(t *testing.T) string {
+	t.Helper()
+	path := writeFixtureDB(t)
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+		ALTER TABLE ZWAMESSAGE ADD COLUMN Z_ENT INTEGER;
+		ALTER TABLE ZWAMESSAGE ADD COLUMN Z_OPT INTEGER;
+		ALTER TABLE ZWAMESSAGE ADD COLUMN ZMESSAGESTATUS INTEGER;
+		ALTER TABLE ZWAMESSAGE ADD COLUMN ZSENTDATE REAL;
+		ALTER TABLE ZWAMESSAGE ADD COLUMN ZTOJID TEXT;
+		ALTER TABLE ZWACHATSESSION ADD COLUMN Z_ENT INTEGER;
+		ALTER TABLE ZWACHATSESSION ADD COLUMN Z_OPT INTEGER;
+		ALTER TABLE ZWACHATSESSION ADD COLUMN ZSESSIONTYPE INTEGER;
+		ALTER TABLE ZWACHATSESSION ADD COLUMN ZLASTMESSAGE INTEGER;
+		ALTER TABLE ZWACHATSESSION ADD COLUMN ZLASTMESSAGETEXT TEXT;
+		CREATE TABLE Z_PRIMARYKEY (Z_ENT INTEGER, Z_NAME TEXT, Z_SUPER INTEGER, Z_MAX INTEGER);`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	if err := os.Mkdir(filepath.Join(filepath.Dir(path), ".whatskept"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestSend(t *testing.T) {
+	path := writeSendWorkspace(t)
+	stop, err := live.StartFakeSend(filepath.Dir(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(stop)
+	sess := connect(t, path)
+
+	var sent live.Sent
+	if res := call(t, sess, "send", map[string]any{"to": "+971501111111", "text": "running late, order for me"}, &sent); res.IsError {
+		t.Fatalf("send: %s", errText(res))
+	}
+	if sent.ID != "FAKE1" || sent.Chat != "971501111111@s.whatsapp.net" || sent.Warning != "" {
+		t.Errorf("sent = %+v", sent)
+	}
+
+	// The sent message is in the history at once — in Sarah's existing
+	// chat, as ours, and searchable.
+	var out queryOut
+	call(t, sess, "query", map[string]any{
+		"sql": "SELECT chat_title, is_from_me FROM v_messages WHERE text = 'running late, order for me'"}, &out)
+	if len(out.Rows) != 1 || out.Rows[0][0] != "Sarah" || out.Rows[0][1] != float64(1) {
+		t.Errorf("rows = %v", out.Rows)
+	}
+	var hits searchOut
+	call(t, sess, "search", map[string]any{"query": "late"}, &hits)
+	if len(hits.Hits) != 1 || hits.Hits[0].Chat != "Sarah" {
+		t.Errorf("hits = %+v", hits.Hits)
+	}
+
+	res := call(t, sess, "send", map[string]any{"to": "Sarah", "text": "hi"}, nil)
+	if !res.IsError || !strings.Contains(errText(res), "invalid chat") {
+		t.Errorf("bad chat: want an error, got %q", errText(res))
+	}
+}
+
+// Without live there is nobody to send: the tool says so, and the
+// query tools carry on.
+func TestSendWithoutLive(t *testing.T) {
+	sess := connect(t, writeSendWorkspace(t))
+	res := call(t, sess, "send", map[string]any{"to": "+971501111111", "text": "hi"}, nil)
+	if !res.IsError || !strings.Contains(errText(res), "`whatskept live` is not running") {
+		t.Errorf("want not-running error, got %q", errText(res))
+	}
+	var out queryOut
+	call(t, sess, "query", map[string]any{"sql": "SELECT COUNT(*) FROM v_messages"}, &out)
+	if len(out.Rows) != 1 || out.Rows[0][0] != float64(3) {
+		t.Errorf("rows = %v, want the 3 fixture messages and nothing new", out.Rows)
 	}
 }

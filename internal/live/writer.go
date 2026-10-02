@@ -31,6 +31,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"go.mau.fi/whatsmeow/proto/waE2E"
@@ -328,6 +329,11 @@ func isNoiseJID(jid types.JID) bool {
 // every call opens, acts and closes — the same discipline the other
 // commands follow, so nothing sits on the file between messages.
 type Writer struct {
+	// mu serializes Apply: captured events arrive on whatsmeow's serial
+	// dispatch, but sent messages are recorded from the send endpoint's
+	// goroutines, and two transactions allocating MAX(Z_PK)+1 at once
+	// would collide.
+	mu     sync.Mutex
 	dbPath string
 	root   string // workspace root; media lands in .unenriched/ under it
 	// resolvePN maps a LID to a phone JID using whatsmeow's local
@@ -399,6 +405,8 @@ func (w *Writer) Apply(ctx context.Context, p plan) (Result, error) {
 	if p.Action == actionSkip {
 		return Result{Action: actionSkip, Reason: p.SkipReason}, nil
 	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
 
 	// Fetch attachment bytes BEFORE the transaction opens. WhatsApp's
 	// CDN blobs expire, so this has to happen on receipt — but a network

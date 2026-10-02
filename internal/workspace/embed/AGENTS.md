@@ -19,6 +19,7 @@ already knows.
 ./ChatStorage.sqlite         # the database — messages, chats, SQL views, FTS index
 ./.whatskept/settings.json   # portable workspace configuration (see below)
 ./.whatskept/session.db      # WhatsApp companion-device session (once `live` has linked)
+./.whatskept/live.json       # live's send endpoint + token (only while `live` runs; a secret)
 ./AGENTS.md                  # this guide (the source of truth)
 ./CLAUDE.md                  # one-line stub importing AGENTS.md
 ./MEMORY.md                  # your own notes across sessions (see below; may not exist yet)
@@ -303,6 +304,17 @@ they want; don't silently default to either:
 Either way, live never touches queued files from import or earlier
 sessions, however many there are; those always need `whatskept
 enrich`.
+
+## Sending a message
+
+`whatskept send <chat> <text>` sends one text from the user's account
+through the running `whatskept live` (it fails with "live is not
+running" otherwise) and records it in the database. `<chat>` is a phone
+number in international format or a chat JID (`…@g.us` for a group).
+It prints `sent id=… chat=… ts=…` and exits 0 only once WhatsApp has
+accepted the message. The MCP server offers the same as its `send`
+tool. Real people read these messages and they cannot be unsent — send
+only what the user explicitly asked for, to the chat they named.
 
 ## Serving over MCP
 

@@ -10,7 +10,8 @@ directory, created with `whatskept init [dir]`. Every command works
 inside one, except `mcp`, which addresses the database file explicitly.
 `.whatskept/` contains `settings.json` — portable configuration,
 including the device/account binding — and, once `live` has linked,
-`session.db` (the companion-device session). All other state (the shared
+`session.db` (the companion-device session), plus `live.json` while
+`live` runs. All other state (the shared
 SQLite database, etc.) sits at the workspace root. Secrets come from
 `.env` or the environment, never from settings:
 
@@ -20,8 +21,13 @@ SQLite database, etc.) sits at the workspace root. Secrets come from
   refused thereafter.
 - `whatskept live` — capture new messages as they arrive, enriched through
   the same pipeline.
+- `whatskept send <chat> <text>` — send a text through the running
+  `live`, which owns the connection and records the message. The
+  hand-off is a loopback endpoint advertised in `.whatskept/live.json`
+  while live runs.
 - `whatskept mcp --database <file>` — the only query surface; serves the
-  unified DB over HTTP at a token-in-path endpoint.
+  unified DB over HTTP at a token-in-path endpoint. Read-only, plus a
+  `send` tool that hands off to the live running beside the database.
 
 Enrichment (image descriptions/OCR, voice transcripts, PDF text) runs via
 OpenRouter on both import and live paths. Media, PDFs and voice files are

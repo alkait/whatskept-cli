@@ -49,6 +49,13 @@ func SessionDBPath(root string) string {
 	return filepath.Join(root, markerDir, "session.db")
 }
 
+// LiveEndpointPath returns where a running `whatskept live` advertises
+// its loopback send endpoint (address + token). Present only while live
+// runs; it holds a credential, so it sits beside the session.
+func LiveEndpointPath(root string) string {
+	return filepath.Join(root, markerDir, "live.json")
+}
+
 // Load reads the settings of a workspace.
 func Load(root string) (Settings, error) {
 	var s Settings

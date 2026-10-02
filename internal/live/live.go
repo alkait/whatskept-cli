@@ -5,9 +5,10 @@
 // leaves it.
 //
 // Deliberately silent on the wire: no presence, no read receipts, no
-// typing indicators, no sends. whatsmeow sends none of these unless
-// asked, and nothing here asks — the user's chats are never marked
-// read behind their back.
+// typing indicators. whatsmeow sends none of these unless asked, and
+// nothing here asks — the user's chats are never marked read behind
+// their back. The one thing live does send is a message it was
+// explicitly handed (see send.go).
 package live
 
 import (
@@ -23,11 +24,13 @@ import (
 	_ "github.com/mattn/go-sqlite3" // whatsmeow's session store; our own DB code stays on modernc
 	"github.com/mdp/qrterminal/v3"
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
+	"google.golang.org/protobuf/proto"
 
 	"whatskept/internal/backup"
 	"whatskept/internal/workspace"
@@ -121,14 +124,13 @@ func Run(ctx context.Context, root string) error {
 	}
 
 	// applyMsg writes one message event and returns a log suffix saying
-	// what happened. Runs inside whatsmeow's event dispatch, which is
-	// serial — the writer never races itself.
-	applyMsg := func(v *events.Message) string {
+	// what happened, plus the write error if there was one.
+	applyMsg := func(v *events.Message) (string, error) {
 		ctx := context.Background()
 		res, err := w.Apply(ctx, decide(v, decryptSecret(ctx, client, v)))
 		if err != nil {
 			writeErrs.Add(1)
-			return fmt.Sprintf(" write=ERROR(%v)", err)
+			return fmt.Sprintf(" write=ERROR(%v)", err), err
 		}
 		switch res.Action {
 		case actionInsert:
@@ -146,16 +148,16 @@ func Run(ctx context.Context, root string) error {
 				// chat resolution is forking threads.
 				s += " NEW-CHAT"
 			}
-			return s
+			return s, nil
 		case actionEdit:
 			edited.Add(1)
-			return fmt.Sprintf(" write=edit pk=%d", res.PK)
+			return fmt.Sprintf(" write=edit pk=%d", res.PK), nil
 		case actionRevoke:
 			revoked.Add(1)
-			return fmt.Sprintf(" write=revoke pk=%d", res.PK)
+			return fmt.Sprintf(" write=revoke pk=%d", res.PK), nil
 		default:
 			skipped.Add(1)
-			return " write=skip(" + res.Reason + ")"
+			return " write=skip(" + res.Reason + ")", nil
 		}
 	}
 
@@ -176,7 +178,8 @@ func Run(ctx context.Context, root string) error {
 		switch v := evt.(type) {
 		case *events.Message:
 			msgCount.Add(1)
-			logMessage(v, applyMsg(v))
+			outcome, _ := applyMsg(v)
+			logMessage(v, outcome)
 		case *events.DeleteForMe:
 			// "Delete for me" does NOT travel as a revoke — WhatsApp
 			// syncs it to the user's own devices as an app-state
@@ -271,6 +274,26 @@ func Run(ctx context.Context, root string) error {
 			return fmt.Errorf("connect: %w", err)
 		}
 	}
+
+	// Sends are handed over by `whatskept send` and the MCP send tool;
+	// recording goes through applyMsg like any captured message.
+	stopSend, err := startSend(root,
+		func(ctx context.Context, to types.JID, text string) (types.MessageID, time.Time, error) {
+			resp, err := client.SendMessage(ctx, to, &waE2E.Message{Conversation: proto.String(text)})
+			return resp.ID, resp.Timestamp, err
+		},
+		func(v *events.Message) error {
+			if id := client.Store.ID; id != nil {
+				v.Info.Sender = id.ToNonAD()
+			}
+			outcome, err := applyMsg(v)
+			logMessage(v, outcome)
+			return err
+		})
+	if err != nil {
+		return err
+	}
+	defer stopSend()
 
 	logf("capturing into %s; media queued in %s; Ctrl-C to stop",
 		backup.ChatStorageName, backup.UnenrichedDir)
@@ -385,7 +408,7 @@ func logMessage(v *events.Message, outcome string) {
 	info := v.Info
 	direction := "recv"
 	if info.IsFromMe {
-		direction = "sent" // from another of the user's own devices
+		direction = "sent" // from another of the user's devices, or by `send`
 	}
 	scope := "dm"
 	if info.IsGroup {

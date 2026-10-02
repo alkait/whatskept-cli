@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 
 	"whatskept/internal/backup"
 	"whatskept/internal/enrich"
+	"whatskept/internal/live"
 	"whatskept/internal/mcpserve"
 )
 
@@ -350,5 +352,119 @@ func TestCLIListEmpty(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "no backups found") {
 		t.Errorf("stdout = %q", stdout)
+	}
+}
+
+func TestCLISendUsage(t *testing.T) {
+	for _, args := range [][]string{{"send"}, {"send", "+971500000001"}, {"send", "+971500000001", "hi", "extra"}} {
+		code, _, stderr := run(t, t.TempDir(), args...)
+		if code != 2 {
+			t.Errorf("%v: exit %d, want 2", args, code)
+		}
+		if !strings.Contains(stderr, "send requires") {
+			t.Errorf("%v: stderr = %q", args, stderr)
+		}
+	}
+}
+
+func TestCLISendOutsideWorkspace(t *testing.T) {
+	code, _, stderr := run(t, t.TempDir(), "send", "+971500000001", "hi")
+	if code != 1 {
+		t.Fatalf("exit %d, want 1", code)
+	}
+	if !strings.Contains(stderr, "not a whatskept workspace") {
+		t.Errorf("stderr = %q", stderr)
+	}
+}
+
+func TestCLISendLiveNotRunning(t *testing.T) {
+	dir := t.TempDir()
+	run(t, dir, "init")
+	check := func(when string) {
+		code, stdout, stderr := run(t, dir, "send", "+971500000001", "hi")
+		if code != 1 {
+			t.Errorf("%s: exit %d, want 1", when, code)
+		}
+		if stdout != "" || !strings.Contains(stderr, "`whatskept live` is not running") {
+			t.Errorf("%s: stdout = %q, stderr = %q", when, stdout, stderr)
+		}
+	}
+	check("no live.json")
+
+	// A live that crashed leaves its advertisement pointing at a dead port.
+	if err := os.WriteFile(filepath.Join(dir, ".whatskept", "live.json"),
+		[]byte(`{"addr":"127.0.0.1:1","token":"00000000000000000000000000000000"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	check("stale live.json")
+}
+
+// sendWorkspace is an initialized workspace with the slice of
+// ChatStorage a text message touches, and the real send endpoint
+// running over it with a stand-in for WhatsApp.
+func sendWorkspace(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	run(t, dir, "init")
+	db, err := sql.Open("sqlite", filepath.Join(dir, backup.ChatStorageName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+		CREATE TABLE ZWAMESSAGE (Z_PK INTEGER PRIMARY KEY, Z_ENT INTEGER, Z_OPT INTEGER,
+			ZCHATSESSION INTEGER, ZGROUPMEMBER INTEGER, ZISFROMME INTEGER,
+			ZMESSAGETYPE INTEGER, ZMESSAGESTATUS INTEGER, ZMESSAGEDATE REAL, ZSENTDATE REAL,
+			ZFROMJID TEXT, ZTOJID TEXT, ZSTANZAID TEXT, ZTEXT TEXT, ZPARENTMESSAGE INTEGER);
+		CREATE TABLE ZWACHATSESSION (Z_PK INTEGER PRIMARY KEY, Z_ENT INTEGER, Z_OPT INTEGER,
+			ZSESSIONTYPE INTEGER, ZCONTACTJID TEXT, ZCONTACTIDENTIFIER TEXT,
+			ZPARTNERNAME TEXT, ZMESSAGECOUNTER INTEGER,
+			ZLASTMESSAGE INTEGER, ZLASTMESSAGEDATE REAL, ZLASTMESSAGETEXT TEXT);
+		CREATE TABLE Z_PRIMARYKEY (Z_ENT INTEGER, Z_NAME TEXT, Z_SUPER INTEGER, Z_MAX INTEGER);
+		CREATE VIRTUAL TABLE messages_fts USING fts5(text);`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	stop, err := live.StartFakeSend(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(stop)
+	return dir
+}
+
+func TestCLISendThroughLive(t *testing.T) {
+	dir := sendWorkspace(t)
+	code, stdout, stderr := run(t, dir, "send", "+971 50 000 0001", "see you at 8")
+	if code != 0 {
+		t.Fatalf("exit %d, want 0; stderr = %q", code, stderr)
+	}
+	if !strings.HasPrefix(stdout, "sent id=FAKE1 chat=971500000001@s.whatsapp.net ts=") || stderr != "" {
+		t.Errorf("stdout = %q, stderr = %q", stdout, stderr)
+	}
+
+	db, err := sql.Open("sqlite", filepath.Join(dir, backup.ChatStorageName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var text, to string
+	var fromMe int
+	if err := db.QueryRow(`SELECT ZTEXT, ZTOJID, ZISFROMME FROM ZWAMESSAGE WHERE ZSTANZAID = 'FAKE1'`).
+		Scan(&text, &to, &fromMe); err != nil {
+		t.Fatal(err)
+	}
+	if text != "see you at 8" || to != "971500000001@s.whatsapp.net" || fromMe != 1 {
+		t.Errorf("row: text=%q to=%q fromMe=%d", text, to, fromMe)
+	}
+}
+
+func TestCLISendRejectsBadChat(t *testing.T) {
+	dir := sendWorkspace(t)
+	code, stdout, stderr := run(t, dir, "send", "Sarah", "hi")
+	if code != 1 {
+		t.Errorf("exit %d, want 1", code)
+	}
+	if stdout != "" || !strings.Contains(stderr, "invalid chat") {
+		t.Errorf("stdout = %q, stderr = %q", stdout, stderr)
 	}
 }

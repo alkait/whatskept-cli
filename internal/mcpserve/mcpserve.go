@@ -7,6 +7,10 @@
 // The server is deliberately schema-agnostic: get_schema hands the
 // agent the real CREATE statements, query runs arbitrary read-only
 // SQL, and search is a convenience wrapper over messages_fts.
+//
+// send is the one tool that is not a query: it hands a text to the
+// `whatskept live` process running beside the database, which sends it
+// and records it. The server itself still never writes.
 package mcpserve
 
 import (
@@ -17,11 +21,14 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	_ "modernc.org/sqlite"
+
+	"whatskept/internal/live"
 )
 
 //go:embed instructions.md
@@ -104,7 +111,7 @@ func newHandler(mcpServer *mcp.Server, token string) http.Handler {
 	return mux
 }
 
-// newMCPServer builds the server with its three tools registered —
+// newMCPServer builds the server with its tools registered —
 // split from Serve so tests can run it over an in-memory transport.
 func newMCPServer(dbPath string) *mcp.Server {
 	s := &server{dbPath: dbPath}
@@ -132,6 +139,13 @@ func newMCPServer(dbPath string) *mcp.Server {
 			"FTS5 syntax: \"exact phrase\", AND, OR, NOT, NEAR/3, prefix*. Use this first " +
 			"for any 'did anyone mention X' question; fall back to query for joins and aggregates.",
 	}, s.search)
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name: "send",
+		Description: "Send a WhatsApp text message from the user's own account. `to` is a phone " +
+			"number in international format or a chat JID (v_chats.jid — the only way to " +
+			"address a group). Irreversible and seen by real people: send only what the user " +
+			"explicitly asked for, to the chat they named. Needs `whatskept live` running.",
+	}, s.send)
 
 	return mcpServer
 }
@@ -311,6 +325,20 @@ func clipString(s string) (string, int) {
 		return s[:cellByteCap] + "…[clipped]", cellByteCap
 	}
 	return s, len(s)
+}
+
+// --- send ---------------------------------------------------------------
+
+type sendIn struct {
+	To   string `json:"to" jsonschema:"phone number in international format (+971501234567) or a chat JID from v_chats.jid"`
+	Text string `json:"text" jsonschema:"the message text"`
+}
+
+// send hands the text to the live process of the workspace the
+// database sits in; live owns the WhatsApp connection.
+func (s *server) send(ctx context.Context, _ *mcp.CallToolRequest, in sendIn) (*mcp.CallToolResult, live.Sent, error) {
+	sent, err := live.Send(ctx, filepath.Dir(s.dbPath), in.To, in.Text)
+	return nil, sent, err
 }
 
 // --- search -------------------------------------------------------------
