@@ -37,6 +37,7 @@ import (
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	_ "modernc.org/sqlite"
 
@@ -336,6 +337,9 @@ type Writer struct {
 	mu     sync.Mutex
 	dbPath string
 	root   string // workspace root; media lands in .unenriched/ under it
+	// self is the linked account's own JID — the author named when a
+	// reply quotes one of our own messages.
+	self func() types.JID
 	// resolvePN maps a LID to a phone JID using whatsmeow's local
 	// mapping store. Used only when the event itself didn't carry one.
 	resolvePN func(context.Context, types.JID) (types.JID, bool)
@@ -889,6 +893,82 @@ func resolveGroupMember(ctx context.Context, tx *sql.Tx, chatPK int64, sender ty
 		INSERT INTO ZWAGROUPMEMBER (Z_PK, Z_ENT, Z_OPT, ZCHATSESSION, ZISACTIVE, ZMEMBERJID)
 		VALUES (?, ?, 1, ?, 1, ?)`, pk, entGroupMember, chatPK, sender.String())
 	return pk, err
+}
+
+// quote builds the reply context for answering the message with the
+// given stanza ID in chat `to`. The target must be a message we hold,
+// in that chat and not deleted: a reply is addressed by stanza ID, and
+// one that names the wrong chat would put a quote of one conversation
+// in front of another.
+//
+// The quoted body is what the recipient's client shows above the reply:
+// the target's text, or for an attachment its caption or filename.
+func (w *Writer) quote(ctx context.Context, to types.JID, stanzaID string) (*waE2E.ContextInfo, error) {
+	db, err := openRW(w.dbPath)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	var chatPK sql.NullInt64
+	var msgType, fromMe int
+	var sender, body string
+	err = tx.QueryRowContext(ctx, `
+		SELECT m.ZCHATSESSION, COALESCE(m.ZMESSAGETYPE, 0), COALESCE(m.ZISFROMME, 0),
+		       COALESCE(gm.ZMEMBERJID, m.ZFROMJID, ''),
+		       COALESCE(NULLIF(m.ZTEXT, ''),
+		                (SELECT COALESCE(NULLIF(mi.ZTITLE, ''), mi.ZAUTHORNAME)
+		                   FROM ZWAMEDIAITEM mi WHERE mi.ZMESSAGE = m.Z_PK LIMIT 1),
+		                '')
+		FROM   ZWAMESSAGE m
+		LEFT JOIN ZWAGROUPMEMBER gm ON gm.Z_PK = m.ZGROUPMEMBER
+		WHERE  m.ZSTANZAID = ? LIMIT 1`, stanzaID).Scan(&chatPK, &msgType, &fromMe, &sender, &body)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("no message with stanza ID %q in the database", stanzaID)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if msgType == 14 {
+		return nil, fmt.Errorf("message %s was deleted", stanzaID)
+	}
+
+	// The same phone/LID candidates resolveChat tries for a DM.
+	var phone, lid types.JID
+	if to.Server == types.HiddenUserServer {
+		lid = to
+		if w.resolvePN != nil {
+			if pn, ok := w.resolvePN(ctx, lid); ok {
+				phone = pn
+			}
+		}
+	} else {
+		phone = to
+	}
+	toPK, ok, err := lookupChat(ctx, tx, nullJID(phone), nullJID(lid))
+	if err != nil {
+		return nil, err
+	}
+	if !ok || !chatPK.Valid || toPK != chatPK.Int64 {
+		return nil, fmt.Errorf("message %s is not in chat %s", stanzaID, to)
+	}
+
+	if fromMe != 0 {
+		sender = ""
+		if w.self != nil {
+			sender = w.self().String()
+		}
+	}
+	return &waE2E.ContextInfo{
+		StanzaID:      proto.String(stanzaID),
+		Participant:   proto.String(sender),
+		QuotedMessage: &waE2E.Message{Conversation: proto.String(body)},
+	}, nil
 }
 
 func findByStanza(ctx context.Context, tx *sql.Tx, stanzaID string) (int64, bool, error) {

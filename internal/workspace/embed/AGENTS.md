@@ -316,8 +316,10 @@ through the running `whatskept live` (it fails with "live is not
 running" otherwise) and records it in the database. `<chat>` is a phone
 number in international format or a chat JID (`…@g.us` for a group).
 It prints `sent id=… chat=… ts=…` and exits 0 only once WhatsApp has
-accepted the message. The MCP server offers the same as its `send`
-tool. Real people read these messages and they cannot be unsent — send
+accepted the message. Add `--reply-to <stanza-id>` after the text to
+quote an earlier message in that chat (`v_messages.stanza_id`; it must
+be in the database, in that chat, and not deleted). The MCP server
+offers the same as its `send` tool, with `reply_to`. Real people read these messages and they cannot be unsent — send
 only what the user explicitly asked for, to the chat they named.
 
 ## Serving over MCP

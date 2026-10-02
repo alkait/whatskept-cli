@@ -21,6 +21,7 @@ Usage:
   whatskept enrich                   turn queued media into searchable text via OpenRouter [--concurrency n]
   whatskept live                     capture new messages as they arrive (links via QR on first run)
   whatskept send <chat> <text>       send a text through the running live (chat: phone number or JID)
+                                     [--reply-to <stanza-id>] quotes a message in that chat
   whatskept mcp --database <file>    serve a database file over MCP (HTTP) [--addr host:port]
   whatskept -v | --version           show the version
   whatskept -h | --help              show this help
@@ -76,11 +77,14 @@ func main() {
 			os.Exit(1)
 		}
 	case "send":
-		if len(os.Args) != 4 {
-			fmt.Fprint(os.Stderr, "send requires a chat (phone number or JID) and the message text\n\n"+usage)
+		replyTo := ""
+		if len(os.Args) == 6 && os.Args[4] == "--reply-to" && os.Args[5] != "" {
+			replyTo = os.Args[5]
+		} else if len(os.Args) != 4 {
+			fmt.Fprint(os.Stderr, "send requires a chat (phone number or JID) and the message text, then optionally --reply-to <stanza-id>\n\n"+usage)
 			os.Exit(2)
 		}
-		if err := runSend(os.Args[2], os.Args[3]); err != nil {
+		if err := runSend(os.Args[2], os.Args[3], replyTo); err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}

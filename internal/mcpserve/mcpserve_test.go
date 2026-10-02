@@ -319,7 +319,21 @@ func TestSend(t *testing.T) {
 		t.Errorf("hits = %+v", hits.Hits)
 	}
 
-	res := call(t, sess, "send", map[string]any{"to": "Sarah", "text": "hi"}, nil)
+	// A reply names its target by stanza_id and shows up linked to it.
+	if res := call(t, sess, "send", map[string]any{"to": "+971501111111", "text": "make it noon", "reply_to": "s1"}, &sent); res.IsError {
+		t.Fatalf("reply: %s", errText(res))
+	}
+	call(t, sess, "query", map[string]any{
+		"sql": "SELECT reply_to_id FROM v_messages WHERE text = 'make it noon'"}, &out)
+	if len(out.Rows) != 1 || out.Rows[0][0] != float64(1) {
+		t.Errorf("reply rows = %v, want reply_to_id 1", out.Rows)
+	}
+	res := call(t, sess, "send", map[string]any{"to": "+971501111111", "text": "hi", "reply_to": "nope"}, nil)
+	if !res.IsError || !strings.Contains(errText(res), "cannot reply") {
+		t.Errorf("bad reply target: want an error, got %q", errText(res))
+	}
+
+	res = call(t, sess, "send", map[string]any{"to": "Sarah", "text": "hi"}, nil)
 	if !res.IsError || !strings.Contains(errText(res), "invalid chat") {
 		t.Errorf("bad chat: want an error, got %q", errText(res))
 	}

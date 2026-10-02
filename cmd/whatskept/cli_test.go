@@ -387,7 +387,8 @@ func TestCLIListEmpty(t *testing.T) {
 }
 
 func TestCLISendUsage(t *testing.T) {
-	for _, args := range [][]string{{"send"}, {"send", "+971500000001"}, {"send", "+971500000001", "hi", "extra"}} {
+	for _, args := range [][]string{{"send"}, {"send", "+971500000001"}, {"send", "+971500000001", "hi", "extra"},
+		{"send", "+971500000001", "hi", "--reply-to"}, {"send", "+971500000001", "hi", "--reply", "X"}} {
 		code, _, stderr := run(t, t.TempDir(), args...)
 		if code != 2 {
 			t.Errorf("%v: exit %d, want 2", args, code)
@@ -450,6 +451,8 @@ func sendWorkspace(t *testing.T) string {
 			ZSESSIONTYPE INTEGER, ZCONTACTJID TEXT, ZCONTACTIDENTIFIER TEXT,
 			ZPARTNERNAME TEXT, ZMESSAGECOUNTER INTEGER,
 			ZLASTMESSAGE INTEGER, ZLASTMESSAGEDATE REAL, ZLASTMESSAGETEXT TEXT);
+		CREATE TABLE ZWAGROUPMEMBER (Z_PK INTEGER PRIMARY KEY, ZCHATSESSION INTEGER, ZMEMBERJID TEXT);
+		CREATE TABLE ZWAMEDIAITEM (Z_PK INTEGER PRIMARY KEY, ZMESSAGE INTEGER, ZAUTHORNAME TEXT, ZTITLE TEXT);
 		CREATE TABLE Z_PRIMARYKEY (Z_ENT INTEGER, Z_NAME TEXT, Z_SUPER INTEGER, Z_MAX INTEGER);
 		CREATE VIRTUAL TABLE messages_fts USING fts5(text);`); err != nil {
 		t.Fatal(err)
@@ -486,6 +489,32 @@ func TestCLISendThroughLive(t *testing.T) {
 	}
 	if text != "see you at 8" || to != "971500000001@s.whatsapp.net" || fromMe != 1 {
 		t.Errorf("row: text=%q to=%q fromMe=%d", text, to, fromMe)
+	}
+}
+
+func TestCLISendReply(t *testing.T) {
+	dir := sendWorkspace(t)
+	run(t, dir, "send", "+971500000001", "see you at 8")
+	code, stdout, stderr := run(t, dir, "send", "+971500000001", "make it 9", "--reply-to", "FAKE1")
+	if code != 0 || !strings.HasPrefix(stdout, "sent id=FAKE2 ") || stderr != "" {
+		t.Fatalf("exit %d, stdout = %q, stderr = %q", code, stdout, stderr)
+	}
+
+	db, err := sql.Open("sqlite", filepath.Join(dir, backup.ChatStorageName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var parent string
+	if err := db.QueryRow(`SELECT p.ZSTANZAID FROM ZWAMESSAGE m JOIN ZWAMESSAGE p ON p.Z_PK = m.ZPARENTMESSAGE
+		WHERE m.ZSTANZAID = 'FAKE2'`).Scan(&parent); err != nil || parent != "FAKE1" {
+		t.Errorf("parent = %q, err = %v, want FAKE1", parent, err)
+	}
+
+	// A target that isn't there sends nothing.
+	code, stdout, stderr = run(t, dir, "send", "+971500000001", "hi", "--reply-to", "NOPE")
+	if code != 1 || stdout != "" || !strings.Contains(stderr, "cannot reply: no message with stanza ID") {
+		t.Errorf("exit %d, stdout = %q, stderr = %q", code, stdout, stderr)
 	}
 }
 

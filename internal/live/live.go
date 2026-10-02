@@ -30,7 +30,6 @@ import (
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
-	"google.golang.org/protobuf/proto"
 
 	"whatskept/internal/backup"
 	"whatskept/internal/workspace"
@@ -91,6 +90,12 @@ func Run(ctx context.Context, root string) error {
 		// Consulted when an event arrives without a phone JID; whatsmeow
 		// keeps this map locally, so it is a store read and not a
 		// network round trip.
+		self: func() types.JID {
+			if id := client.Store.ID; id != nil {
+				return id.ToNonAD()
+			}
+			return types.JID{}
+		},
 		resolvePN: func(ctx context.Context, lid types.JID) (types.JID, bool) {
 			pn, err := client.Store.LIDs.GetPNForLID(ctx, lid)
 			return pn, err == nil && !pn.IsEmpty()
@@ -278,10 +283,11 @@ func Run(ctx context.Context, root string) error {
 	// Sends are handed over by `whatskept send` and the MCP send tool;
 	// recording goes through applyMsg like any captured message.
 	stopSend, err := startSend(root,
-		func(ctx context.Context, to types.JID, text string) (types.MessageID, time.Time, error) {
-			resp, err := client.SendMessage(ctx, to, &waE2E.Message{Conversation: proto.String(text)})
+		func(ctx context.Context, to types.JID, msg *waE2E.Message) (types.MessageID, time.Time, error) {
+			resp, err := client.SendMessage(ctx, to, msg)
 			return resp.ID, resp.Timestamp, err
 		},
+		w.quote,
 		func(v *events.Message) error {
 			if id := client.Store.ID; id != nil {
 				v.Info.Sender = id.ToNonAD()

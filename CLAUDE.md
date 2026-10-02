@@ -21,8 +21,9 @@ SQLite database, etc.) sits at the workspace root. Secrets come from
   refused thereafter.
 - `whatskept live` — capture new messages as they arrive, enriched through
   the same pipeline.
-- `whatskept send <chat> <text>` — send a text through the running
-  `live`, which owns the connection and records the message. The
+- `whatskept send <chat> <text> [--reply-to <stanza-id>]` — send a text
+  through the running `live`, which owns the connection and records the
+  message; `--reply-to` quotes an earlier message in that chat. The
   hand-off is a loopback endpoint advertised in `.whatskept/live.json`
   while live runs.
 - `whatskept mcp --database <file>` — the only query surface; serves the

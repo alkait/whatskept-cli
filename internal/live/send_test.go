@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 
@@ -22,13 +23,16 @@ import (
 type fakeWire struct {
 	err  error
 	sent []string // "<jid> <text>"
+	msgs []*waE2E.Message
 }
 
-func (f *fakeWire) deliver(_ context.Context, to types.JID, text string) (types.MessageID, time.Time, error) {
+func (f *fakeWire) deliver(_ context.Context, to types.JID, msg *waE2E.Message) (types.MessageID, time.Time, error) {
 	if f.err != nil {
 		return "", time.Time{}, f.err
 	}
+	text, _ := textOf(msg)
 	f.sent = append(f.sent, to.String()+" "+text)
+	f.msgs = append(f.msgs, msg)
 	id := types.MessageID("OUT" + string(rune('0'+len(f.sent))))
 	return id, time.Date(2026, 8, 27, 10, 0, len(f.sent), 0, time.UTC), nil
 }
@@ -42,7 +46,7 @@ func sendFixture(t *testing.T) (*Writer, string, *fakeWire) {
 		t.Fatal(err)
 	}
 	wire := &fakeWire{}
-	stop, err := startSend(root, wire.deliver, func(v *events.Message) error {
+	stop, err := startSend(root, wire.deliver, w.quote, func(v *events.Message) error {
 		_, err := w.Apply(context.Background(), decide(v, nil))
 		return err
 	})
@@ -78,7 +82,7 @@ func TestParseChat(t *testing.T) {
 func TestSendDeliversAndRecords(t *testing.T) {
 	w, root, wire := sendFixture(t)
 
-	sent, err := Send(context.Background(), root, "+971 50 000 0001", "hello from send")
+	sent, err := Send(context.Background(), root, "+971 50 000 0001", "hello from send", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +116,7 @@ func TestSendDeliversAndRecords(t *testing.T) {
 
 	// A second send lands in the same chat; a reply arriving from the
 	// partner joins it too rather than forking a thread.
-	if _, err := Send(context.Background(), root, "971500000001@s.whatsapp.net", "and again"); err != nil {
+	if _, err := Send(context.Background(), root, "971500000001@s.whatsapp.net", "and again", ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := w.Apply(context.Background(), decide(dmEvent("IN1", "got it"), nil)); err != nil {
@@ -132,7 +136,7 @@ func TestSendDeliversAndRecords(t *testing.T) {
 
 func TestSendToGroup(t *testing.T) {
 	w, root, _ := sendFixture(t)
-	if _, err := Send(context.Background(), root, "120363000000000001@g.us", "hi all"); err != nil {
+	if _, err := Send(context.Background(), root, "120363000000000001@g.us", "hi all", ""); err != nil {
 		t.Fatal(err)
 	}
 	var sessionType int
@@ -147,6 +151,110 @@ func TestSendToGroup(t *testing.T) {
 	}
 }
 
+// A reply quotes its target on the wire and is recorded with the
+// parent link, whoever wrote the target.
+func TestSendReply(t *testing.T) {
+	w, root, wire := sendFixture(t)
+	w.self = func() types.JID { return types.NewJID("971509999999", types.DefaultUserServer) }
+	in, err := w.Apply(context.Background(), decide(dmEvent("IN1", "lunch tomorrow?"), nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sent, err := Send(context.Background(), root, "+971500000001", "yes, 1pm", "IN1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ci := wire.msgs[0].GetExtendedTextMessage().GetContextInfo()
+	if wire.sent[0] != "971500000001@s.whatsapp.net yes, 1pm" || ci.GetStanzaID() != "IN1" ||
+		ci.GetParticipant() != "971500000001@s.whatsapp.net" ||
+		ci.GetQuotedMessage().GetConversation() != "lunch tomorrow?" {
+		t.Errorf("wire = %q, context = %v", wire.sent, ci)
+	}
+	var parent sql.NullInt64
+	if err := queryDB(t, w, `SELECT ZPARENTMESSAGE FROM ZWAMESSAGE WHERE ZSTANZAID = ?`, sent.ID).Scan(&parent); err != nil {
+		t.Fatal(err)
+	}
+	if parent.Int64 != in.PK {
+		t.Errorf("ZPARENTMESSAGE = %v, want %d", parent, in.PK)
+	}
+
+	// Quoting one of our own messages names us as its author.
+	if _, err := Send(context.Background(), root, "+971500000001", "make it 2pm", sent.ID); err != nil {
+		t.Fatal(err)
+	}
+	ci = wire.msgs[1].GetExtendedTextMessage().GetContextInfo()
+	if ci.GetParticipant() != "971509999999@s.whatsapp.net" || ci.GetQuotedMessage().GetConversation() != "yes, 1pm" {
+		t.Errorf("own-message context = %v", ci)
+	}
+}
+
+// An attachment has no text of its own: the quote shows its caption,
+// or failing that its filename.
+func TestSendReplyQuotesMedia(t *testing.T) {
+	w, root, wire := sendFixture(t)
+	if _, err := w.Apply(context.Background(), decide(dmEvent("IN1", "hello"), nil)); err != nil {
+		t.Fatal(err)
+	}
+	db, err := openRW(w.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`
+		INSERT INTO ZWAMESSAGE (Z_PK, ZCHATSESSION, ZISFROMME, ZMESSAGETYPE, ZFROMJID, ZSTANZAID) VALUES
+			(50, 1, 0, 1, '971500000001@s.whatsapp.net', 'IMG'),
+			(51, 1, 0, 8, '971500000001@s.whatsapp.net', 'PDF');
+		INSERT INTO ZWAMEDIAITEM (Z_PK, ZMESSAGE, ZAUTHORNAME, ZTITLE) VALUES
+			(1, 50, NULL, 'the receipt'), (2, 51, 'scan.pdf', NULL);`); err != nil {
+		t.Fatal(err)
+	}
+	for i, c := range []struct{ target, want string }{{"IMG", "the receipt"}, {"PDF", "scan.pdf"}} {
+		if _, err := Send(context.Background(), root, "+971500000001", "got it", c.target); err != nil {
+			t.Fatal(err)
+		}
+		got := wire.msgs[i].GetExtendedTextMessage().GetContextInfo().GetQuotedMessage().GetConversation()
+		if got != c.want {
+			t.Errorf("quote of %s = %q, want %q", c.target, got, c.want)
+		}
+	}
+}
+
+func TestSendReplyRejectsBadTarget(t *testing.T) {
+	w, root, wire := sendFixture(t)
+	for _, v := range []*events.Message{dmEvent("IN1", "hello"), dmEvent("GONE", "oops")} {
+		if _, err := w.Apply(context.Background(), decide(v, nil)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db, err := openRW(w.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`UPDATE ZWAMESSAGE SET ZMESSAGETYPE = 14, ZTEXT = NULL WHERE ZSTANZAID = 'GONE'`); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ to, target, want string }{
+		{"+971500000001", "NOPE", "no message with stanza ID"},
+		{"+971500000002", "IN1", "is not in chat 971500000002@s.whatsapp.net"},
+		{"120363000000000001@g.us", "IN1", "is not in chat"},
+		{"+971500000001", "GONE", "was deleted"},
+	} {
+		_, err := Send(context.Background(), root, c.to, "hi", c.target)
+		if err == nil || !strings.Contains(err.Error(), "cannot reply") || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("Send(%q, reply %q): err = %v, want %q", c.to, c.target, err, c.want)
+		}
+	}
+	var rows int
+	if err := queryDB(t, w, `SELECT COUNT(*) FROM ZWAMESSAGE`).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if len(wire.sent) != 0 || rows != 2 {
+		t.Errorf("wire=%q rows=%d, want nothing sent or stored", wire.sent, rows)
+	}
+}
+
 func TestSendRejectsBadInput(t *testing.T) {
 	w, root, wire := sendFixture(t)
 	for _, c := range []struct{ to, text, want string }{
@@ -154,7 +262,7 @@ func TestSendRejectsBadInput(t *testing.T) {
 		{"status@broadcast", "hi", "cannot send"},
 		{"+971500000001", "  ", "empty message"},
 	} {
-		_, err := Send(context.Background(), root, c.to, c.text)
+		_, err := Send(context.Background(), root, c.to, c.text, "")
 		if err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("Send(%q, %q): err = %v, want %q", c.to, c.text, err, c.want)
 		}
@@ -171,7 +279,7 @@ func TestSendRejectsBadInput(t *testing.T) {
 func TestSendDeliveryFailure(t *testing.T) {
 	w, root, wire := sendFixture(t)
 	wire.err = errors.New("websocket not connected")
-	_, err := Send(context.Background(), root, "+971500000001", "hi")
+	_, err := Send(context.Background(), root, "+971500000001", "hi", "")
 	if err == nil || !strings.Contains(err.Error(), "websocket not connected") {
 		t.Fatalf("err = %v", err)
 	}
@@ -189,14 +297,14 @@ func TestSendDeliveryFailure(t *testing.T) {
 func TestSendRecordFailureWarns(t *testing.T) {
 	root := initWorkspace(t)
 	wire := &fakeWire{}
-	stop, err := startSend(root, wire.deliver, func(*events.Message) error {
+	stop, err := startSend(root, wire.deliver, nil, func(*events.Message) error {
 		return errors.New("database is locked")
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer stop()
-	sent, err := Send(context.Background(), root, "+971500000001", "hi")
+	sent, err := Send(context.Background(), root, "+971500000001", "hi", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +332,7 @@ func TestSendWrongToken(t *testing.T) {
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Send(context.Background(), root, "+971500000001", "hi"); err == nil {
+	if _, err := Send(context.Background(), root, "+971500000001", "hi", ""); err == nil {
 		t.Error("send with the wrong token succeeded")
 	}
 	if len(wire.sent) != 0 {
@@ -237,12 +345,12 @@ func TestSendEndpointLifecycle(t *testing.T) {
 	path := workspace.LiveEndpointPath(root)
 
 	// Never started.
-	if _, err := Send(context.Background(), root, "+971500000001", "hi"); !errors.Is(err, ErrNotRunning) {
+	if _, err := Send(context.Background(), root, "+971500000001", "hi", ""); !errors.Is(err, ErrNotRunning) {
 		t.Errorf("no live: err = %v, want ErrNotRunning", err)
 	}
 
 	wire := &fakeWire{}
-	stop, err := startSend(root, wire.deliver, func(*events.Message) error { return nil })
+	stop, err := startSend(root, wire.deliver, nil, func(*events.Message) error { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,7 +376,7 @@ func TestSendEndpointLifecycle(t *testing.T) {
 	if err := os.WriteFile(path, stale, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Send(context.Background(), root, "+971500000001", "hi"); !errors.Is(err, ErrNotRunning) {
+	if _, err := Send(context.Background(), root, "+971500000001", "hi", ""); !errors.Is(err, ErrNotRunning) {
 		t.Errorf("stale live.json: err = %v, want ErrNotRunning", err)
 	}
 }

@@ -24,6 +24,9 @@ real people read it and it cannot be taken back.
 - `to` is a phone number in international format or a chat's
   `v_chats.jid` (the only way to address a group). Resolve names
   through `v_chats` first; if more than one chat matches, ask.
+- To reply to a specific message, pass its `v_messages.stanza_id` as
+  `reply_to` (not the rowid). It must be a message in the `to` chat and
+  not deleted; the reply shows up with `reply_to_id` set.
 - The sent message is in the history immediately. A `warning` in the
   result means it went out but was not stored — do **not** resend.
 - "live is not running" means capture is stopped on the host; tell the

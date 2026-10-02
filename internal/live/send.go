@@ -53,8 +53,9 @@ type Sent struct {
 }
 
 type sendRequest struct {
-	To   string `json:"to"`
-	Text string `json:"text"`
+	To      string `json:"to"`
+	Text    string `json:"text"`
+	ReplyTo string `json:"reply_to,omitempty"` // stanza ID of the message to quote
 }
 
 type sendReply struct {
@@ -67,10 +68,14 @@ type endpoint struct {
 	Token string `json:"token"`
 }
 
-// deliverFunc puts a text on the wire and returns the stanza ID and
+// deliverFunc puts a message on the wire and returns the stanza ID and
 // timestamp WhatsApp assigned. Injected so the endpoint is testable
 // without a WhatsApp connection.
-type deliverFunc func(ctx context.Context, to types.JID, text string) (types.MessageID, time.Time, error)
+type deliverFunc func(ctx context.Context, to types.JID, msg *waE2E.Message) (types.MessageID, time.Time, error)
+
+// quoteFunc builds the reply context for answering the message with the
+// given stanza ID in chat `to` (see Writer.quote).
+type quoteFunc func(ctx context.Context, to types.JID, stanzaID string) (*waE2E.ContextInfo, error)
 
 // ParseChat turns what a caller typed into a chat JID: a phone number
 // ("+971 50 000 0001") or a full JID (…@s.whatsapp.net, …@g.us, …@lid).
@@ -97,8 +102,8 @@ func ParseChat(s string) (types.JID, error) {
 
 // sentEvent is the message event WhatsApp would have delivered had the
 // send come from another of the user's devices.
-func sentEvent(to types.JID, id types.MessageID, ts time.Time, text string) *events.Message {
-	v := &events.Message{Message: &waE2E.Message{Conversation: proto.String(text)}}
+func sentEvent(to types.JID, id types.MessageID, ts time.Time, msg *waE2E.Message) *events.Message {
+	v := &events.Message{Message: msg}
 	v.Info.ID = id
 	v.Info.Chat = to
 	v.Info.IsFromMe = true
@@ -110,7 +115,7 @@ func sentEvent(to types.JID, id types.MessageID, ts time.Time, text string) *eve
 // startSend serves the send endpoint for the workspace at root and
 // advertises it in .whatskept/live.json. The returned stop closes the
 // listener and removes the advertisement.
-func startSend(root string, deliver deliverFunc, record func(*events.Message) error) (stop func(), err error) {
+func startSend(root string, deliver deliverFunc, quote quoteFunc, record func(*events.Message) error) (stop func(), err error) {
 	raw := make([]byte, 16)
 	if _, err := rand.Read(raw); err != nil {
 		return nil, err
@@ -146,14 +151,26 @@ func startSend(root string, deliver deliverFunc, record func(*events.Message) er
 
 		ctx, cancel := context.WithTimeout(r.Context(), sendTimeout)
 		defer cancel()
-		id, ts, err := deliver(ctx, to, req.Text)
+		// A reply is the same text carrying a quote of its target — the
+		// shape textOf reads back, so recording links ZPARENTMESSAGE.
+		msg := &waE2E.Message{Conversation: proto.String(req.Text)}
+		if req.ReplyTo != "" {
+			quoted, err := quote(ctx, to, req.ReplyTo)
+			if err != nil {
+				reply(http.StatusBadRequest, sendReply{Error: "cannot reply: " + err.Error()})
+				return
+			}
+			msg = &waE2E.Message{ExtendedTextMessage: &waE2E.ExtendedTextMessage{
+				Text: proto.String(req.Text), ContextInfo: quoted}}
+		}
+		id, ts, err := deliver(ctx, to, msg)
 		if err != nil {
 			logf("send to %s FAILED: %v", to, err)
 			reply(http.StatusBadGateway, sendReply{Error: "send failed: " + err.Error()})
 			return
 		}
 		out := sendReply{Sent: Sent{ID: string(id), Chat: to.String(), Ts: ts.UTC().Format(time.RFC3339)}}
-		if err := record(sentEvent(to, id, ts, req.Text)); err != nil {
+		if err := record(sentEvent(to, id, ts, msg)); err != nil {
 			out.Warning = "sent, but not recorded in the database: " + err.Error()
 		}
 		reply(http.StatusOK, out)
@@ -192,9 +209,10 @@ func StartFakeSend(root string) (stop func(), err error) {
 	}
 	var n atomic.Int64
 	return startSend(root,
-		func(context.Context, types.JID, string) (types.MessageID, time.Time, error) {
+		func(context.Context, types.JID, *waE2E.Message) (types.MessageID, time.Time, error) {
 			return types.MessageID(fmt.Sprintf("FAKE%d", n.Add(1))), time.Now(), nil
 		},
+		w.quote,
 		func(v *events.Message) error {
 			_, err := w.Apply(context.Background(), decide(v, nil))
 			return err
@@ -202,8 +220,9 @@ func StartFakeSend(root string) (stop func(), err error) {
 }
 
 // Send asks the live process running in the workspace at root to send
-// text to a chat (see ParseChat for the accepted forms).
-func Send(ctx context.Context, root, to, text string) (Sent, error) {
+// text to a chat (see ParseChat for the accepted forms). A non-empty
+// replyTo is the stanza ID of a message in that chat to quote.
+func Send(ctx context.Context, root, to, text, replyTo string) (Sent, error) {
 	data, err := os.ReadFile(workspace.LiveEndpointPath(root))
 	if err != nil {
 		return Sent{}, ErrNotRunning
@@ -212,7 +231,7 @@ func Send(ctx context.Context, root, to, text string) (Sent, error) {
 	if err := json.Unmarshal(data, &ep); err != nil {
 		return Sent{}, fmt.Errorf("parse %s: %w", workspace.LiveEndpointPath(root), err)
 	}
-	body, err := json.Marshal(sendRequest{To: to, Text: text})
+	body, err := json.Marshal(sendRequest{To: to, Text: text, ReplyTo: replyTo})
 	if err != nil {
 		return Sent{}, err
 	}

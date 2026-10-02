@@ -13,15 +13,16 @@ import (
 
 // runSend hands one text message to the `whatskept live` process
 // running in this workspace — live owns the WhatsApp connection, so it
-// does the sending and records the message in the database.
-func runSend(chat, text string) error {
+// does the sending and records the message in the database. A non-empty
+// replyTo is the stanza ID of the message to quote.
+func runSend(chat, text, replyTo string) error {
 	root, err := workspace.Find()
 	if err != nil {
 		return err
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	sent, err := live.Send(ctx, root, chat, text)
+	sent, err := live.Send(ctx, root, chat, text, replyTo)
 	if err != nil {
 		return err
 	}
