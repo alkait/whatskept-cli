@@ -111,6 +111,10 @@ the binary, re-run `whatskept init` to refresh this guide, and
 restart any running `live` or `mcp` — on a deployed host too. Never
 update unprompted.
 
+After an update, re-read "Serving over MCP": if the user's MCP client
+still points at an old `/<token>/mcp` URL, that endpoint is gone —
+follow "Moving off a token-in-path URL" there.
+
 Check whether a `.env` file exists and which variables it defines —
 names only, never the values:
 
@@ -324,17 +328,26 @@ connects to it. Your own direct access to `ChatStorage.sqlite` is
 operational only — read-only checks of progress and coverage, never
 content answers, never writes (see Hard rules).
 
-1. Generate a token and start the server (from this directory):
+1. Make sure `.env` holds a token — generate one only if
+   `WHATSKEPT_MCP_TOKEN` is missing, without printing it:
 
    ```
-   WHATSKEPT_MCP_TOKEN=$(openssl rand -hex 16) whatskept mcp --database ./ChatStorage.sqlite
+   echo "WHATSKEPT_MCP_TOKEN=$(openssl rand -hex 16)" >> .env
    ```
 
-   Run it in the background; it prints the endpoint, which embeds the
-   token: `http://127.0.0.1:8787/<token>/mcp`. The unguessable path is
-   the only credential — treat the URL as a secret.
+   The server refuses tokens shorter than 32 characters.
 
-2. To expose it for testing (e.g. a claude.ai custom connector), offer
+2. Start the server (from this directory), in the background:
+
+   ```
+   set -a; source .env; set +a; whatskept mcp --database ./ChatStorage.sqlite
+   ```
+
+   It prints the endpoint, `http://127.0.0.1:8787/mcp`. The URL is not
+   a secret; the token is. Every request must carry it as the header
+   `Authorization: Bearer <token>`, or gets a 401.
+
+3. To expose it for testing (e.g. a claude.ai custom connector), offer
    a Cloudflare quick tunnel (https://trycloudflare.com — no account
    needed; `brew install cloudflared` if missing):
 
@@ -342,11 +355,28 @@ content answers, never writes (see Hard rules).
    cloudflared tunnel --url http://127.0.0.1:8787
    ```
 
-   Hand the user the combined URL to paste into their MCP client:
+   The client URL is then `https://<random>.trycloudflare.com/mcp`.
 
-   ```
-   https://<random>.trycloudflare.com/<token>/mcp
-   ```
+4. Tell the user how to connect their client — the URL, plus the
+   token as a request header. They copy the token out of `.env`
+   themselves; never echo it into the conversation, a command line, or
+   MEMORY.md.
+
+   - claude.ai custom connector: paste the URL, choose the
+     no-sign-in option, and under request headers add `authorization`
+     with the value `Bearer <token>`.
+   - Claude Code:
+     `claude mcp add --transport http whatskept <url> --header "Authorization: Bearer <token>"`
+
+### Moving off a token-in-path URL
+
+Older versions served the endpoint at `/<token>/mcp`. That path no
+longer exists. If the user's client is still configured that way:
+replace `WHATSKEPT_MCP_TOKEN` in `.env` with a fresh one (the old
+token has sat in URLs and logs), restart `whatskept mcp` — on the
+deployed host if that is where it runs — and have the user re-point
+their client at `<base>/mcp` with the header as in step 4. Scrub any
+old tokenized URL from MEMORY.md.
 
 ## Deploying to an always-on host
 
@@ -385,7 +415,8 @@ Manage the whole process over ssh. The steps, generically:
    user prefers is fine. The quick tunnel above is for testing, not
    24×7.
 5. Record the outcome in MEMORY.md: the host and how to reach it,
-   how live is kept running, the endpoint URL, and the date.
+   how live is kept running, the endpoint URL (never the token), and
+   the date.
 
 Two rules protect the data — these matter more than anything else in
 this section:

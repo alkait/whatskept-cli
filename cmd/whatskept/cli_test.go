@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"database/sql"
 	"os"
 	"os/exec"
@@ -327,6 +328,36 @@ func TestCLIMCPRequiresToken(t *testing.T) {
 	}
 	if !strings.Contains(stderr, mcpserve.TokenEnv) {
 		t.Errorf("stderr = %q, want mention of %s", stderr, mcpserve.TokenEnv)
+	}
+}
+
+// TestCLIMCPNeverPrintsToken: the startup lines name the endpoint, not
+// the secret.
+func TestCLIMCPNeverPrintsToken(t *testing.T) {
+	const token = "0123456789abcdef0123456789abcdef"
+	cmd := exec.Command(binPath, "mcp", "--database", "ChatStorage.sqlite", "--addr", "127.0.0.1:0")
+	cmd.Dir = t.TempDir()
+	cmd.Env = append(os.Environ(), mcpserve.TokenEnv+"="+token)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	// Both startup lines, then stop the server.
+	var out string
+	sc := bufio.NewScanner(stdout)
+	for i := 0; i < 2 && sc.Scan(); i++ {
+		out += sc.Text() + "\n"
+	}
+	cmd.Process.Kill()
+	cmd.Wait()
+	if !strings.Contains(out, "/mcp") {
+		t.Errorf("stdout = %q, want the endpoint", out)
+	}
+	if strings.Contains(out, token) {
+		t.Errorf("stdout leaks the token: %q", out)
 	}
 }
 

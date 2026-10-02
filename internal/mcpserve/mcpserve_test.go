@@ -184,45 +184,76 @@ func TestToolsWithoutDatabase(t *testing.T) {
 	}
 }
 
-// TestHTTPTransport drives a real streamable-HTTP client session
-// against the handler, with token auth in all its forms.
+// bearer sets a fixed Authorization header on every request.
+type bearer string
+
+func (b bearer) RoundTrip(r *http.Request) (*http.Response, error) {
+	r = r.Clone(r.Context())
+	r.Header.Set("Authorization", string(b))
+	return http.DefaultTransport.RoundTrip(r)
+}
+
+// TestHTTPTransport drives the handler over real HTTP: the bearer
+// token is the gate, and the old token-in-path URL is gone.
 func TestHTTPTransport(t *testing.T) {
-	const token = "sekrit"
+	const token = "0123456789abcdef0123456789abcdef"
 	ts := httptest.NewServer(newHandler(newMCPServer(writeFixtureDB(t)), token))
 	t.Cleanup(ts.Close)
 
-	// With a token set, /mcp itself is not served.
-	resp, err := http.Post(ts.URL+"/mcp", "application/json", strings.NewReader("{}"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusNotFound {
-		t.Errorf("bare /mcp with token set: status %d, want 404", resp.StatusCode)
+	for _, tc := range []struct {
+		name, path, auth string
+		want             int
+	}{
+		{"no header", "/mcp", "", http.StatusUnauthorized},
+		{"wrong token", "/mcp", "Bearer wrong", http.StatusUnauthorized},
+		{"empty bearer", "/mcp", "Bearer ", http.StatusUnauthorized},
+		{"token in path", "/" + token + "/mcp", "", http.StatusNotFound},
+	} {
+		req, _ := http.NewRequest("POST", ts.URL+tc.path, strings.NewReader("{}"))
+		req.Header.Set("Content-Type", "application/json")
+		if tc.auth != "" {
+			req.Header.Set("Authorization", tc.auth)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != tc.want {
+			t.Errorf("%s: status %d, want %d", tc.name, resp.StatusCode, tc.want)
+		}
 	}
 
-	// Full MCP session via the token-in-path variant.
-	sess, err := mcp.NewClient(&mcp.Implementation{Name: "test"}, nil).Connect(
-		context.Background(),
-		&mcp.StreamableClientTransport{Endpoint: ts.URL + "/" + token + "/mcp"},
-		nil,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { sess.Close() })
-	var out searchOut
-	call(t, sess, "search", map[string]any{"query": "café"}, &out)
-	if len(out.Hits) != 1 || out.Hits[0].Rowid != 1 {
-		t.Errorf("hits over HTTP = %+v", out.Hits)
+	// Full MCP session, with and without the "Bearer " prefix.
+	for _, auth := range []string{"Bearer " + token, "bearer " + token, token} {
+		sess, err := mcp.NewClient(&mcp.Implementation{Name: "test"}, nil).Connect(
+			context.Background(),
+			&mcp.StreamableClientTransport{
+				Endpoint:   ts.URL + "/mcp",
+				HTTPClient: &http.Client{Transport: bearer(auth)},
+			},
+			nil,
+		)
+		if err != nil {
+			t.Fatalf("auth %q: %v", auth, err)
+		}
+		var out searchOut
+		call(t, sess, "search", map[string]any{"query": "café"}, &out)
+		if len(out.Hits) != 1 || out.Hits[0].Rowid != 1 {
+			t.Errorf("auth %q: hits over HTTP = %+v", auth, out.Hits)
+		}
+		sess.Close()
 	}
 }
 
-// TestServeRequiresToken: no token, no server — one mode only.
+// TestServeRequiresToken: no token, or a weak one, no server — one
+// mode only.
 func TestServeRequiresToken(t *testing.T) {
-	err := Serve(context.Background(), writeFixtureDB(t), "127.0.0.1:0", "")
-	if err == nil || !strings.Contains(err.Error(), TokenEnv) {
-		t.Errorf("err = %v, want mention of %s", err, TokenEnv)
+	for _, token := range []string{"", "tooshort"} {
+		err := Serve(context.Background(), writeFixtureDB(t), "127.0.0.1:0", token)
+		if err == nil || !strings.Contains(err.Error(), TokenEnv) {
+			t.Errorf("token %q: err = %v, want mention of %s", token, err, TokenEnv)
+		}
 	}
 }
 

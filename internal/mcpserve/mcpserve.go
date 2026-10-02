@@ -15,6 +15,7 @@ package mcpserve
 
 import (
 	"context"
+	"crypto/subtle"
 	"database/sql"
 	_ "embed"
 	"errors"
@@ -53,12 +54,14 @@ type server struct {
 // Serve runs the MCP server over streamable HTTP on addr until ctx is
 // cancelled. dbPath is the workspace's ChatStorage.sqlite; it may be
 // absent (tools report "run whatskept import first"). The token is
-// required — the endpoint lives ONLY at the token-in-path URL
-// /<token>/mcp, and the unguessable path is the credential. One mode,
-// dev and production alike.
+// required — the endpoint is /mcp and every request must carry it as
+// `Authorization: Bearer <token>`. One mode, dev and production alike.
 func Serve(ctx context.Context, dbPath, addr, token string) error {
 	if token == "" {
-		return errors.New("set " + TokenEnv + " — the MCP endpoint is served at /<token>/mcp and the token is required")
+		return errors.New("set " + TokenEnv + " — every request to the MCP endpoint must carry it as a bearer token")
+	}
+	if len(token) < minTokenLen {
+		return fmt.Errorf("%s is too short — use at least %d characters, e.g. `openssl rand -hex 16`", TokenEnv, minTokenLen)
 	}
 	// Startup probe: report state but serve regardless — the workspace
 	// may simply not be imported yet.
@@ -79,7 +82,8 @@ func Serve(ctx context.Context, dbPath, addr, token string) error {
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- httpServer.ListenAndServe() }()
-	fmt.Printf("MCP endpoint:  http://%s/%s/mcp (the token in the path is the credential)\n", addr, token)
+	// The token is never printed — logs are not a place for secrets.
+	fmt.Printf("MCP endpoint:  http://%s/mcp (send header `Authorization: Bearer $%s`)\n", addr, TokenEnv)
 	fmt.Printf("Database:      %s\n", dbState)
 
 	select {
@@ -95,19 +99,37 @@ func Serve(ctx context.Context, dbPath, addr, token string) error {
 // TokenEnv is where Serve's callers read the auth token from.
 const TokenEnv = "WHATSKEPT_MCP_TOKEN"
 
-// newHandler routes the MCP endpoint at /<token>/mcp — the unguessable
-// path is the sole credential.
+// minTokenLen is the shortest token Serve accepts — 32 hex characters
+// is 128 bits.
+const minTokenLen = 32
+
+// newHandler routes the MCP endpoint at /mcp behind the bearer token —
+// the Authorization header is the sole credential, so the URL itself
+// is not a secret.
 func newHandler(mcpServer *mcp.Server, token string) http.Handler {
 	// The SDK's DNS-rebinding protection 403s requests that arrive on a
 	// localhost address with a non-localhost Host header — which is
 	// exactly how every tunnel (cloudflared, ssh -R) delivers traffic.
-	// The token path is the gate, so lift it.
+	// The token is the gate, so lift it.
 	handler := mcp.NewStreamableHTTPHandler(
 		func(*http.Request) *mcp.Server { return mcpServer },
 		&mcp.StreamableHTTPOptions{DisableLocalhostProtection: true},
 	)
 	mux := http.NewServeMux()
-	mux.Handle("/"+token+"/mcp", handler)
+	mux.HandleFunc("/mcp", func(rw http.ResponseWriter, r *http.Request) {
+		// The "Bearer " prefix is optional: some clients send the
+		// configured header value verbatim.
+		got := r.Header.Get("Authorization")
+		if len(got) > 7 && strings.EqualFold(got[:7], "Bearer ") {
+			got = got[7:]
+		}
+		if subtle.ConstantTimeCompare([]byte(got), []byte(token)) != 1 {
+			rw.Header().Set("WWW-Authenticate", "Bearer")
+			http.Error(rw, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		handler.ServeHTTP(rw, r)
+	})
 	return mux
 }
 

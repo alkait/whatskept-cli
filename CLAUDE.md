@@ -26,7 +26,7 @@ SQLite database, etc.) sits at the workspace root. Secrets come from
   hand-off is a loopback endpoint advertised in `.whatskept/live.json`
   while live runs.
 - `whatskept mcp --database <file>` — the only query surface; serves the
-  unified DB over HTTP at a token-in-path endpoint. Read-only, plus a
+  unified DB over HTTP at `/mcp`, behind a bearer token. Read-only, plus a
   `send` tool that hands off to the live running beside the database.
 
 Enrichment (image descriptions/OCR, voice transcripts, PDF text) runs via
