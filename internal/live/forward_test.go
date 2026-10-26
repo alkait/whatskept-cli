@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"google.golang.org/protobuf/encoding/protowire"
+	"google.golang.org/protobuf/proto"
 
 	"whatskept/internal/backup"
 )
@@ -190,6 +191,40 @@ func TestForwardMedia(t *testing.T) {
 	}
 }
 
+// Media live captured itself forwards like imported media: capture
+// stores the download details forward reads.
+func TestForwardLiveCapture(t *testing.T) {
+	w, root, wire := sendFixture(t)
+	w.download = func(context.Context, downloadable) ([]byte, error) { return []byte("jpgbytes"), nil }
+	v := imageEvent("CAPTURED", "sunset")
+	img := v.Message.GetImageMessage()
+	img.MediaKey, img.FileEncSHA256 = testKey, testEncSHA
+	img.Mimetype, img.MediaKeyTimestamp = proto.String("image/png"), proto.Int64(1788072483)
+	if _, err := w.Apply(context.Background(), decide(v, nil)); err != nil {
+		t.Fatal(err)
+	}
+
+	var key, meta []byte
+	if err := queryDB(t, w, `SELECT ZMEDIAKEY, ZMETADATA FROM ZWAMEDIAITEM`).Scan(&key, &meta); err != nil {
+		t.Fatal(err)
+	}
+	if m, err := decodeStoredMedia(key, meta); err != nil || m.DirectPath != "/v/t62.7118-24/x" {
+		t.Errorf("stored details = %+v, %v", m, err)
+	}
+
+	if _, err := Forward(context.Background(), root, "+971500000002", "CAPTURED"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(wire.fetched, ",") != "CAPTURED" {
+		t.Errorf("fetched = %q", wire.fetched)
+	}
+	got := wire.msgs[0].GetImageMessage()
+	if !bytes.Equal(got.GetMediaKey(), testKey) || !bytes.Equal(got.GetFileEncSHA256(), testEncSHA) ||
+		got.GetMediaKeyTimestamp() != 1788072483 || got.GetMimetype() != "image/png" || got.GetCaption() != "sunset" {
+		t.Errorf("image = %v", got)
+	}
+}
+
 func TestForwardRefusals(t *testing.T) {
 	w, root, wire := sendFixture(t)
 	importedMedia(t, w)
@@ -203,7 +238,7 @@ func TestForwardRefusals(t *testing.T) {
 		{"GONE", "was deleted"},
 		{"SONG", "only voice notes"},
 		{"STICKER", "cannot be forwarded yet"},
-		{"LIVEIMG", "after the next import"},
+		{"LIVEIMG", "download details are not stored"},
 	} {
 		_, err := Forward(context.Background(), root, "+971500000002", c.id)
 		if err == nil || !strings.Contains(err.Error(), "cannot forward") || !strings.Contains(err.Error(), c.want) {

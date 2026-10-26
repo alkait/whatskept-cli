@@ -632,19 +632,26 @@ func (w *Writer) applyInsert(ctx context.Context, tx *sql.Tx, p plan) (Result, e
 // of whatskept reads exactly these: ZMEDIALOCALPATH (its extension
 // selects candidates in blob/queue selection), ZAUTHORNAME (views.sql
 // builds wa_document from it), ZTITLE (folded into messages_fts by the
-// FTS rebuild), plus size and duration.
+// FTS rebuild), plus size and duration — and the download details and
+// mimetype a forward reads (ZMEDIAKEY, ZMETADATA, ZVCARDSTRING).
 func insertMediaItem(ctx context.Context, tx *sql.Tx, msgPK int64, m *mediaPlan) error {
 	pk, err := nextPK(ctx, tx, "ZWAMEDIAITEM")
 	if err != nil {
 		return err
 	}
+	key, meta := encodeStoredMedia(storedMedia{
+		MediaKey: m.Source.GetMediaKey(), FileEncSHA256: m.Source.GetFileEncSHA256(),
+		KeyTimestamp: m.KeyTime, DirectPath: m.Source.GetDirectPath(),
+	})
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO ZWAMEDIAITEM
 		    (Z_PK, Z_ENT, Z_OPT, ZMESSAGE, ZMEDIALOCALPATH,
-		     ZFILESIZE, ZMOVIEDURATION, ZAUTHORNAME, ZTITLE)
-		VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?)`,
+		     ZFILESIZE, ZMOVIEDURATION, ZAUTHORNAME, ZTITLE,
+		     ZMEDIAKEY, ZMETADATA, ZVCARDSTRING)
+		VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		pk, entMediaItem, msgPK, m.LocalPath,
 		m.Size, m.Duration, nullIfEmpty(m.FileName), nullIfEmpty(m.Caption),
+		key, meta, nullIfEmpty(m.Mimetype),
 	); err != nil {
 		return fmt.Errorf("insert media item: %w", err)
 	}

@@ -15,9 +15,8 @@ package live
 //     in the row, so the file is downloaded once, in memory, to compute
 //     it. Nothing is written to disk.
 //
-// Media captured by live itself has no stored download details yet;
-// those rows become forwardable once the next import replaces them with
-// the phone's own.
+// Media captured by live stores the same details, in the same shape
+// (encodeStoredMedia), so it forwards like imported media.
 
 import (
 	"context"
@@ -135,7 +134,7 @@ func (w *Writer) forwardSource(ctx context.Context, stanzaID string) (forwardSou
 	}
 
 	if len(key) == 0 || len(meta) == 0 {
-		return forwardSource{}, fmt.Errorf("message %s: its attachment's download details are not stored (media captured by `whatskept live`) — it becomes forwardable after the next import", stanzaID)
+		return forwardSource{}, fmt.Errorf("message %s: its attachment's download details are not stored", stanzaID)
 	}
 	m, err := decodeStoredMedia(key, meta)
 	if err != nil {
@@ -176,6 +175,23 @@ func decodeStoredMedia(mediaKey, metadata []byte) (storedMedia, error) {
 		return m, errors.New("stored download details are incomplete")
 	}
 	return m, nil
+}
+
+// encodeStoredMedia writes the fields decodeStoredMedia reads, in the
+// phone's layout, so live's own captures forward like imported media.
+func encodeStoredMedia(m storedMedia) (mediaKey, metadata []byte) {
+	if len(m.MediaKey) == 0 || m.DirectPath == "" {
+		return nil, nil
+	}
+	mediaKey = protowire.AppendTag(mediaKey, 1, protowire.BytesType)
+	mediaKey = protowire.AppendBytes(mediaKey, m.MediaKey)
+	mediaKey = protowire.AppendTag(mediaKey, 2, protowire.BytesType)
+	mediaKey = protowire.AppendBytes(mediaKey, m.FileEncSHA256)
+	mediaKey = protowire.AppendTag(mediaKey, 3, protowire.VarintType)
+	mediaKey = protowire.AppendVarint(mediaKey, uint64(m.KeyTimestamp))
+	metadata = protowire.AppendTag(metadata, 4, protowire.BytesType)
+	metadata = protowire.AppendBytes(metadata, []byte(m.DirectPath))
+	return mediaKey, metadata
 }
 
 type wireFields struct {

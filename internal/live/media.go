@@ -64,6 +64,8 @@ type mediaPlan struct {
 	LocalPath   string // synthesized ZMEDIALOCALPATH
 	Caption     string // ZWAMEDIAITEM.ZTITLE
 	FileName    string // ZWAMEDIAITEM.ZAUTHORNAME (documents)
+	Mimetype    string // ZWAMEDIAITEM.ZVCARDSTRING
+	KeyTime     int64  // media key timestamp, stored in ZMEDIAKEY
 	Duration    uint32 // ZWAMEDIAITEM.ZMOVIEDURATION (voice notes)
 	Size        uint64 // ZWAMEDIAITEM.ZFILESIZE
 
@@ -83,8 +85,10 @@ func classifyMedia(msg *waE2E.Message, chat types.JID) *mediaPlan {
 		// Always .jpg: WhatsApp stores the path that way regardless of
 		// the actual encoding, and import's image extractor mirrors it.
 		return newMediaPlan(img, chat, 1, "media", ".jpg", &mediaPlan{
-			Caption: img.GetCaption(),
-			Size:    img.GetFileLength(),
+			Caption:  img.GetCaption(),
+			Size:     img.GetFileLength(),
+			Mimetype: img.GetMimetype(),
+			KeyTime:  img.GetMediaKeyTimestamp(),
 		})
 
 	case msg.GetAudioMessage() != nil:
@@ -97,6 +101,8 @@ func classifyMedia(msg *waE2E.Message, chat types.JID) *mediaPlan {
 		return newMediaPlan(aud, chat, 3, "voice", ".opus", &mediaPlan{
 			Duration: aud.GetSeconds(),
 			Size:     aud.GetFileLength(),
+			Mimetype: aud.GetMimetype(),
+			KeyTime:  aud.GetMediaKeyTimestamp(),
 		})
 
 	case msg.GetDocumentMessage() != nil:
@@ -114,6 +120,8 @@ func classifyMedia(msg *waE2E.Message, chat types.JID) *mediaPlan {
 			Caption:  doc.GetCaption(),
 			FileName: doc.GetFileName(),
 			Size:     doc.GetFileLength(),
+			Mimetype: doc.GetMimetype(),
+			KeyTime:  doc.GetMediaKeyTimestamp(),
 		})
 	}
 	return nil

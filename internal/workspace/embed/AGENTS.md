@@ -322,8 +322,7 @@ be in the database, in that chat, and not deleted).
 `whatskept send <chat> --forward <stanza-id>` forwards a message from
 any chat instead — text, link, image, voice note or document, marked
 "Forwarded" for the recipient. An attachment no longer on WhatsApp's
-servers is re-uploaded by the user's phone first; media captured by
-`live` becomes forwardable after the next import. The MCP server
+servers is re-uploaded by the user's phone first. The MCP server
 offers the same as its `send` tool, with `reply_to` and `forward`. Real people read these messages and they cannot be unsent — send
 only what the user explicitly asked for, to the chat they named.
 
