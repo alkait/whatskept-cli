@@ -514,3 +514,53 @@ func TestReplyCaptured(t *testing.T) {
 		t.Errorf("ZPARENTMESSAGE = %+v, want %d", parent, pkA)
 	}
 }
+
+// TestForwardSent drives a forward the other way: the tester sends a
+// text, then `whatskept send --forward` sends it back to the tester's
+// chat through the running live, which records the forward there.
+func TestForwardSent(t *testing.T) {
+	cfg := loadConfig(t)
+	stanza, text := sendText(t, cfg, "forward-me")
+	db := openWorkspaceDB(t, cfg)
+	pk := waitForRow(t, db, stanza)
+
+	// The destination is the tester's own chat, read from the captured
+	// row — never configured.
+	var testerChat string
+	if err := db.QueryRow(`SELECT cs.ZCONTACTJID FROM ZWAMESSAGE m
+		JOIN ZWACHATSESSION cs ON cs.Z_PK = m.ZCHATSESSION WHERE m.Z_PK = ?`, pk).Scan(&testerChat); err != nil {
+		t.Fatal(err)
+	}
+
+	bin := filepath.Join(t.TempDir(), "whatskept")
+	build := exec.Command("go", "build", "-o", bin, "./cmd/whatskept")
+	build.Dir = ".."
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build whatskept: %v\n%s", err, out)
+	}
+	cmd := exec.Command(bin, "send", testerChat, "--forward", stanza)
+	cmd.Dir = cfg.Workspace
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("whatskept send --forward: %v\n%s", err, out)
+	}
+	m := sentID.FindStringSubmatch(string(out))
+	if m == nil {
+		t.Fatalf("no stanza ID in send output: %s", out)
+	}
+	fwd := waitForRow(t, db, m[1])
+
+	var got string
+	var fromMe int
+	var chat int64
+	var origChat int64
+	if err := db.QueryRow(`SELECT ZTEXT, ZISFROMME, ZCHATSESSION FROM ZWAMESSAGE WHERE Z_PK = ?`, fwd).Scan(&got, &fromMe, &chat); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT ZCHATSESSION FROM ZWAMESSAGE WHERE Z_PK = ?`, pk).Scan(&origChat); err != nil {
+		t.Fatal(err)
+	}
+	if got != text || fromMe != 1 || chat != origChat {
+		t.Errorf("forward row: text=%q fromMe=%d chat=%d, want %q, 1, %d", got, fromMe, chat, text, origChat)
+	}
+}

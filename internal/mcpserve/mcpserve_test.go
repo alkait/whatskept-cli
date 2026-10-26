@@ -278,6 +278,10 @@ func writeSendWorkspace(t *testing.T) string {
 		ALTER TABLE ZWACHATSESSION ADD COLUMN ZSESSIONTYPE INTEGER;
 		ALTER TABLE ZWACHATSESSION ADD COLUMN ZLASTMESSAGE INTEGER;
 		ALTER TABLE ZWACHATSESSION ADD COLUMN ZLASTMESSAGETEXT TEXT;
+		ALTER TABLE ZWAMEDIAITEM ADD COLUMN ZMOVIEDURATION INTEGER;
+		ALTER TABLE ZWAMEDIAITEM ADD COLUMN ZMEDIAKEY BLOB;
+		ALTER TABLE ZWAMEDIAITEM ADD COLUMN ZMETADATA BLOB;
+		ALTER TABLE ZWAMEDIAITEM ADD COLUMN ZVCARDSTRING TEXT;
 		CREATE TABLE Z_PRIMARYKEY (Z_ENT INTEGER, Z_NAME TEXT, Z_SUPER INTEGER, Z_MAX INTEGER);`); err != nil {
 		t.Fatal(err)
 	}
@@ -336,6 +340,24 @@ func TestSend(t *testing.T) {
 	res = call(t, sess, "send", map[string]any{"to": "Sarah", "text": "hi"}, nil)
 	if !res.IsError || !strings.Contains(errText(res), "invalid chat") {
 		t.Errorf("bad chat: want an error, got %q", errText(res))
+	}
+
+	// A forward names the original by stanza_id, from any chat, and
+	// lands in the destination chat.
+	if res := call(t, sess, "send", map[string]any{"to": "+971502222222", "forward": "s1"}, &sent); res.IsError {
+		t.Fatalf("forward: %s", errText(res))
+	}
+	call(t, sess, "query", map[string]any{"sql": "SELECT text, is_from_me FROM v_messages WHERE stanza_id = '" + sent.ID + "'"}, &out)
+	if len(out.Rows) != 1 || out.Rows[0][0] != "lunch at the cafe tomorrow?" || out.Rows[0][1] != float64(1) {
+		t.Errorf("forward rows = %v", out.Rows)
+	}
+	res = call(t, sess, "send", map[string]any{"to": "+971502222222", "forward": "s1", "text": "look"}, nil)
+	if !res.IsError || !strings.Contains(errText(res), "leave text and reply_to empty") {
+		t.Errorf("forward with text: want an error, got %q", errText(res))
+	}
+	res = call(t, sess, "send", map[string]any{"to": "+971502222222", "forward": "s3"}, nil)
+	if !res.IsError || !strings.Contains(errText(res), "cannot forward") {
+		t.Errorf("forward without stored download details: want an error, got %q", errText(res))
 	}
 }
 

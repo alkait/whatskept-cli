@@ -23,9 +23,11 @@ SQLite database, etc.) sits at the workspace root. Secrets come from
   the same pipeline.
 - `whatskept send <chat> <text> [--reply-to <stanza-id>]` — send a text
   through the running `live`, which owns the connection and records the
-  message; `--reply-to` quotes an earlier message in that chat. The
-  hand-off is a loopback endpoint advertised in `.whatskept/live.json`
-  while live runs.
+  message; `--reply-to` quotes an earlier message in that chat.
+  `whatskept send <chat> --forward <stanza-id>` forwards a message from
+  any chat instead — attachments by their stored download details, the
+  phone re-uploading any the CDN has dropped. The hand-off is a
+  loopback endpoint advertised in `.whatskept/live.json` while live runs.
 - `whatskept mcp --database <file>` — the only query surface; serves the
   unified DB over HTTP at `/mcp`, behind a bearer token. Read-only, plus a
   `send` tool that hands off to the live running beside the database.

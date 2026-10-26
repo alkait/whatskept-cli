@@ -12,6 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"go.mau.fi/whatsmeow/proto/waE2E"
+	"google.golang.org/protobuf/proto"
+
 	"whatskept/internal/backup"
 	"whatskept/internal/enrich"
 )
@@ -203,5 +206,41 @@ func TestPendingRemovesLeftovers(t *testing.T) {
 	}
 	if calls.Load() != 0 {
 		t.Errorf("paid calls = %d, want 0", calls.Load())
+	}
+}
+
+// A document captured after the last import has no wa_document row, so
+// its filename must survive the refresh enrichment does.
+func TestRefreshFTSRowKeepsDocumentFilename(t *testing.T) {
+	w, _ := newTestWriter(t)
+	w.download = func(context.Context, downloadable) ([]byte, error) { return []byte("%PDF-1.4"), nil }
+	v := dmEvent("DOC1", "")
+	v.Message = &waE2E.Message{DocumentMessage: &waE2E.DocumentMessage{
+		FileName: proto.String("passport scan.pdf"), DirectPath: proto.String("/x"), FileLength: proto.Uint64(8)}}
+	res, err := w.Apply(context.Background(), decide(v, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := openRW(w.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`
+		CREATE TABLE wa_document (rowid INTEGER PRIMARY KEY, filename TEXT, ext TEXT, file_size INTEGER);
+		CREATE TABLE wa_document_text (rowid INTEGER PRIMARY KEY, text TEXT);
+		INSERT INTO wa_document_text VALUES (?, 'visa application');`, res.PK); err != nil {
+		t.Fatal(err)
+	}
+	if err := refreshFTSRow(db, res.PK); err != nil {
+		t.Fatal(err)
+	}
+	var text string
+	if err := db.QueryRow(`SELECT text FROM messages_fts WHERE rowid = ?`, res.PK).Scan(&text); err != nil {
+		t.Fatal(err)
+	}
+	if text != "passport scan.pdf visa application" {
+		t.Errorf("fts text = %q, want the filename and the extracted text", text)
 	}
 }

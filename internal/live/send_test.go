@@ -24,6 +24,19 @@ type fakeWire struct {
 	err  error
 	sent []string // "<jid> <text>"
 	msgs []*waE2E.Message
+
+	// fetch stand-in: the attachment's current path and plaintext hash,
+	// or fetchErr.
+	fetchErr error
+	fetched  []string // stanza IDs
+}
+
+func (f *fakeWire) fetch(_ context.Context, src forwardSource) (string, []byte, error) {
+	f.fetched = append(f.fetched, src.Stanza)
+	if f.fetchErr != nil {
+		return "", nil, f.fetchErr
+	}
+	return "/v/fresh-path", []byte("0123456789abcdef0123456789abcdef"), nil
 }
 
 func (f *fakeWire) deliver(_ context.Context, to types.JID, msg *waE2E.Message) (types.MessageID, time.Time, error) {
@@ -46,10 +59,11 @@ func sendFixture(t *testing.T) (*Writer, string, *fakeWire) {
 		t.Fatal(err)
 	}
 	wire := &fakeWire{}
-	stop, err := startSend(root, wire.deliver, w.quote, func(v *events.Message) error {
-		_, err := w.Apply(context.Background(), decide(v, nil))
-		return err
-	})
+	stop, err := startSend(root, wire.deliver, w.quote, w.forwardSource, wire.fetch,
+		func(v *events.Message, forwardOf int64) error {
+			_, err := w.Apply(context.Background(), forwardPlan(decide(v, nil), forwardOf))
+			return err
+		})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -297,7 +311,7 @@ func TestSendDeliveryFailure(t *testing.T) {
 func TestSendRecordFailureWarns(t *testing.T) {
 	root := initWorkspace(t)
 	wire := &fakeWire{}
-	stop, err := startSend(root, wire.deliver, nil, func(*events.Message) error {
+	stop, err := startSend(root, wire.deliver, nil, nil, nil, func(*events.Message, int64) error {
 		return errors.New("database is locked")
 	})
 	if err != nil {
@@ -350,7 +364,7 @@ func TestSendEndpointLifecycle(t *testing.T) {
 	}
 
 	wire := &fakeWire{}
-	stop, err := startSend(root, wire.deliver, nil, func(*events.Message) error { return nil })
+	stop, err := startSend(root, wire.deliver, nil, nil, nil, func(*events.Message, int64) error { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}

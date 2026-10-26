@@ -388,7 +388,8 @@ func TestCLIListEmpty(t *testing.T) {
 
 func TestCLISendUsage(t *testing.T) {
 	for _, args := range [][]string{{"send"}, {"send", "+971500000001"}, {"send", "+971500000001", "hi", "extra"},
-		{"send", "+971500000001", "hi", "--reply-to"}, {"send", "+971500000001", "hi", "--reply", "X"}} {
+		{"send", "+971500000001", "hi", "--reply-to"}, {"send", "+971500000001", "hi", "--reply", "X"},
+		{"send", "+971500000001", "--forward"}, {"send", "+971500000001", "--forward", "X", "extra"}} {
 		code, _, stderr := run(t, t.TempDir(), args...)
 		if code != 2 {
 			t.Errorf("%v: exit %d, want 2", args, code)
@@ -452,7 +453,9 @@ func sendWorkspace(t *testing.T) string {
 			ZPARTNERNAME TEXT, ZMESSAGECOUNTER INTEGER,
 			ZLASTMESSAGE INTEGER, ZLASTMESSAGEDATE REAL, ZLASTMESSAGETEXT TEXT);
 		CREATE TABLE ZWAGROUPMEMBER (Z_PK INTEGER PRIMARY KEY, ZCHATSESSION INTEGER, ZMEMBERJID TEXT);
-		CREATE TABLE ZWAMEDIAITEM (Z_PK INTEGER PRIMARY KEY, ZMESSAGE INTEGER, ZAUTHORNAME TEXT, ZTITLE TEXT);
+		CREATE TABLE ZWAMEDIAITEM (Z_PK INTEGER PRIMARY KEY, ZMESSAGE INTEGER, ZMEDIALOCALPATH TEXT,
+			ZFILESIZE INTEGER, ZMOVIEDURATION INTEGER, ZAUTHORNAME TEXT, ZTITLE TEXT,
+			ZMEDIAKEY BLOB, ZMETADATA BLOB, ZVCARDSTRING TEXT);
 		CREATE TABLE Z_PRIMARYKEY (Z_ENT INTEGER, Z_NAME TEXT, Z_SUPER INTEGER, Z_MAX INTEGER);
 		CREATE VIRTUAL TABLE messages_fts USING fts5(text);`); err != nil {
 		t.Fatal(err)
@@ -514,6 +517,33 @@ func TestCLISendReply(t *testing.T) {
 	// A target that isn't there sends nothing.
 	code, stdout, stderr = run(t, dir, "send", "+971500000001", "hi", "--reply-to", "NOPE")
 	if code != 1 || stdout != "" || !strings.Contains(stderr, "cannot reply: no message with stanza ID") {
+		t.Errorf("exit %d, stdout = %q, stderr = %q", code, stdout, stderr)
+	}
+}
+
+func TestCLISendForward(t *testing.T) {
+	dir := sendWorkspace(t)
+	run(t, dir, "send", "+971500000001", "see you at 8")
+	code, stdout, stderr := run(t, dir, "send", "+971500000002", "--forward", "FAKE1")
+	if code != 0 || !strings.HasPrefix(stdout, "sent id=FAKE2 chat=971500000002@s.whatsapp.net ") || stderr != "" {
+		t.Fatalf("exit %d, stdout = %q, stderr = %q", code, stdout, stderr)
+	}
+
+	db, err := sql.Open("sqlite", filepath.Join(dir, backup.ChatStorageName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var text, to string
+	if err := db.QueryRow(`SELECT ZTEXT, ZTOJID FROM ZWAMESSAGE WHERE ZSTANZAID = 'FAKE2'`).Scan(&text, &to); err != nil {
+		t.Fatal(err)
+	}
+	if text != "see you at 8" || to != "971500000002@s.whatsapp.net" {
+		t.Errorf("row: text=%q to=%q", text, to)
+	}
+
+	code, stdout, stderr = run(t, dir, "send", "+971500000002", "--forward", "NOPE")
+	if code != 1 || stdout != "" || !strings.Contains(stderr, "cannot forward: no message with stanza ID") {
 		t.Errorf("exit %d, stdout = %q, stderr = %q", code, stdout, stderr)
 	}
 }

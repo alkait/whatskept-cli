@@ -318,8 +318,13 @@ number in international format or a chat JID (`…@g.us` for a group).
 It prints `sent id=… chat=… ts=…` and exits 0 only once WhatsApp has
 accepted the message. Add `--reply-to <stanza-id>` after the text to
 quote an earlier message in that chat (`v_messages.stanza_id`; it must
-be in the database, in that chat, and not deleted). The MCP server
-offers the same as its `send` tool, with `reply_to`. Real people read these messages and they cannot be unsent — send
+be in the database, in that chat, and not deleted).
+`whatskept send <chat> --forward <stanza-id>` forwards a message from
+any chat instead — text, link, image, voice note or document, marked
+"Forwarded" for the recipient. An attachment no longer on WhatsApp's
+servers is re-uploaded by the user's phone first; media captured by
+`live` becomes forwardable after the next import. The MCP server
+offers the same as its `send` tool, with `reply_to` and `forward`. Real people read these messages and they cannot be unsent — send
 only what the user explicitly asked for, to the chat they named.
 
 ## Serving over MCP

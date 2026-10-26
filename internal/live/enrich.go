@@ -264,8 +264,12 @@ func queueSize(root string) int {
 
 // refreshFTSRow rewrites one message's FTS entry as the concatenation
 // of every text surface that now exists for it — the same surfaces the
-// full rebuild in the views package folds in.
-func refreshFTSRow(db *sql.DB, pk int64) error {
+// full rebuild in the views package folds in. db is a connection or a
+// transaction.
+func refreshFTSRow(db interface {
+	QueryRow(string, ...any) *sql.Row
+	Exec(string, ...any) (sql.Result, error)
+}, pk int64) error {
 	var parts []string
 	add := func(s sql.NullString) {
 		if s.Valid && s.String != "" {
@@ -283,7 +287,11 @@ func refreshFTSRow(db *sql.DB, pk int64) error {
 	}{
 		{"wa_image_text", `SELECT COALESCE(ocr_text,'') || ' ' || COALESCE(description,'') FROM wa_image_text WHERE rowid = ?`},
 		{"wa_voice_text", `SELECT COALESCE(transcript,'') FROM wa_voice_text WHERE rowid = ?`},
-		{"wa_document", `SELECT COALESCE(filename,'') FROM wa_document WHERE rowid = ?`},
+		// The filename the rebuild takes from wa_document, read at its
+		// source: wa_document is only filled when the views script runs,
+		// so it has no row for a document captured since.
+		{"ZWAMEDIAITEM", `SELECT COALESCE(mi.ZAUTHORNAME,'') FROM ZWAMEDIAITEM mi
+			JOIN ZWAMESSAGE m ON m.Z_PK = mi.ZMESSAGE WHERE mi.ZMESSAGE = ? AND m.ZMESSAGETYPE = 8`},
 		{"wa_document_text", `SELECT COALESCE(text,'') FROM wa_document_text WHERE rowid = ?`},
 	} {
 		var exists int

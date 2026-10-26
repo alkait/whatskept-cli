@@ -420,7 +420,7 @@ func (w *Writer) Apply(ctx context.Context, p plan) (Result, error) {
 	// A download that fails is a skip, not an error: the message is on
 	// the phone and the next backup brings the row and the file together,
 	// which is strictly better than a row pointing at nothing.
-	if p.Media != nil {
+	if p.Media != nil && p.Media.CopyFrom == 0 {
 		if w.download == nil {
 			return Result{Action: actionSkip, Reason: "media capture disabled"}, nil
 		}
@@ -590,16 +590,25 @@ func (w *Writer) applyInsert(ctx context.Context, tx *sql.Tx, p plan) (Result, e
 		if err := insertMediaItem(ctx, tx, pk, p.Media); err != nil {
 			return Result{}, err
 		}
-		tmp, final, rel, err := w.stageMediaFile(pk, p.Media)
-		if err != nil {
+		if p.Media.CopyFrom == 0 {
+			tmp, final, rel, err := w.stageMediaFile(pk, p.Media)
+			if err != nil {
+				return Result{}, err
+			}
+			res.mediaTmp, res.mediaFinal, res.MediaPath = tmp, final, rel
+		} else if err := copyDerivedText(ctx, tx, p.Media.CopyFrom, pk); err != nil {
 			return Result{}, err
 		}
-		res.mediaTmp, res.mediaFinal, res.MediaPath = tmp, final, rel
 	}
 
 	// FTS shares the rowid with ZWAMESSAGE.Z_PK — that's the contract
-	// v_messages and the search tool rely on.
-	if err := ftsInsert(ctx, tx, pk, p.ftsText()); err != nil {
+	// v_messages and the search tool rely on. A forward's copied text
+	// is folded in the way enrichment folds its own.
+	if p.Media != nil && p.Media.CopyFrom != 0 {
+		if err := refreshFTSRow(tx, pk); err != nil {
+			return Result{}, err
+		}
+	} else if err := ftsInsert(ctx, tx, pk, p.ftsText()); err != nil {
 		return Result{}, err
 	}
 
@@ -733,6 +742,43 @@ func (w *Writer) applyRevoke(ctx context.Context, tx *sql.Tx, p plan) (Result, e
 		res.mediaFinal = filepath.Join(w.root, rel)
 	}
 	return res, nil
+}
+
+// copyDerivedText gives message `to` a copy of whatever enrichment
+// produced for message `from` — a forward is the same image, voice note
+// or document, so paying to describe it again would buy the same text.
+// Columns are read from the table itself, so this follows the schema.
+func copyDerivedText(ctx context.Context, tx *sql.Tx, from, to int64) error {
+	for _, t := range []string{"wa_image_text", "wa_voice_text", "wa_document_text"} {
+		rows, err := tx.QueryContext(ctx, `SELECT name FROM pragma_table_info(?)`, t)
+		if err != nil {
+			return err
+		}
+		var cols []string
+		for rows.Next() {
+			var c string
+			if err := rows.Scan(&c); err != nil {
+				rows.Close()
+				return err
+			}
+			if c != "rowid" {
+				cols = append(cols, c)
+			}
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		if len(cols) == 0 { // the table doesn't exist
+			continue
+		}
+		list := strings.Join(cols, ", ")
+		if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO `+t+` (rowid, `+list+`)
+			SELECT ?, `+list+` FROM `+t+` WHERE rowid = ?`, to, from); err != nil {
+			return fmt.Errorf("copy %s: %w", t, err)
+		}
+	}
+	return nil
 }
 
 // forgetDerivedText removes anything an enrichment pass produced for a

@@ -67,6 +67,10 @@ type mediaPlan struct {
 	Duration    uint32 // ZWAMEDIAITEM.ZMOVIEDURATION (voice notes)
 	Size        uint64 // ZWAMEDIAITEM.ZFILESIZE
 
+	// CopyFrom is set on a forward we sent: the Z_PK of the original.
+	// Nothing is downloaded; the original's derived text is copied.
+	CopyFrom int64
+
 	Data []byte // downloaded bytes; filled by Writer.Apply
 }
 

@@ -22,6 +22,8 @@ Usage:
   whatskept live                     capture new messages as they arrive (links via QR on first run)
   whatskept send <chat> <text>       send a text through the running live (chat: phone number or JID)
                                      [--reply-to <stanza-id>] quotes a message in that chat
+  whatskept send <chat> --forward <stanza-id>
+                                     forward a message (text, image, voice note, document) to a chat
   whatskept mcp --database <file>    serve a database file over MCP (HTTP) [--addr host:port]
   whatskept -v | --version           show the version
   whatskept -h | --help              show this help
@@ -77,14 +79,19 @@ func main() {
 			os.Exit(1)
 		}
 	case "send":
-		replyTo := ""
-		if len(os.Args) == 6 && os.Args[4] == "--reply-to" && os.Args[5] != "" {
-			replyTo = os.Args[5]
-		} else if len(os.Args) != 4 {
-			fmt.Fprint(os.Stderr, "send requires a chat (phone number or JID) and the message text, then optionally --reply-to <stanza-id>\n\n"+usage)
+		var text, replyTo, forward string
+		switch {
+		case len(os.Args) == 5 && os.Args[3] == "--forward" && os.Args[4] != "":
+			forward = os.Args[4]
+		case len(os.Args) == 6 && os.Args[4] == "--reply-to" && os.Args[5] != "":
+			text, replyTo = os.Args[3], os.Args[5]
+		case len(os.Args) == 4 && os.Args[3] != "--forward":
+			text = os.Args[3]
+		default:
+			fmt.Fprint(os.Stderr, "send requires a chat (phone number or JID) and the message text, then optionally --reply-to <stanza-id>; or a chat and --forward <stanza-id>\n\n"+usage)
 			os.Exit(2)
 		}
-		if err := runSend(os.Args[2], os.Args[3], replyTo); err != nil {
+		if err := runSend(os.Args[2], text, replyTo, forward); err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}

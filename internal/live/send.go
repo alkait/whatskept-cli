@@ -36,7 +36,9 @@ import (
 	"whatskept/internal/workspace"
 )
 
-const sendTimeout = 30 * time.Second
+// Generous for a forward, which may wait on the phone to re-upload an
+// attachment and then download it.
+const sendTimeout = 60 * time.Second
 
 // ErrNotRunning is what Send returns when no live process is listening
 // in the workspace.
@@ -56,6 +58,7 @@ type sendRequest struct {
 	To      string `json:"to"`
 	Text    string `json:"text"`
 	ReplyTo string `json:"reply_to,omitempty"` // stanza ID of the message to quote
+	Forward string `json:"forward,omitempty"`  // stanza ID of the message to forward
 }
 
 type sendReply struct {
@@ -112,10 +115,14 @@ func sentEvent(to types.JID, id types.MessageID, ts time.Time, msg *waE2E.Messag
 	return v
 }
 
+// recordFunc stores a sent message. forwardOf is the Z_PK of the
+// original when the message is a forward, else 0.
+type recordFunc func(v *events.Message, forwardOf int64) error
+
 // startSend serves the send endpoint for the workspace at root and
 // advertises it in .whatskept/live.json. The returned stop closes the
 // listener and removes the advertisement.
-func startSend(root string, deliver deliverFunc, quote quoteFunc, record func(*events.Message) error) (stop func(), err error) {
+func startSend(root string, deliver deliverFunc, quote quoteFunc, source sourceFunc, fetch fetchFunc, record recordFunc) (stop func(), err error) {
 	raw := make([]byte, 16)
 	if _, err := rand.Read(raw); err != nil {
 		return nil, err
@@ -144,7 +151,11 @@ func startSend(root string, deliver deliverFunc, quote quoteFunc, record func(*e
 			reply(http.StatusBadRequest, sendReply{Error: err.Error()})
 			return
 		}
-		if strings.TrimSpace(req.Text) == "" {
+		if req.Forward != "" && (req.Text != "" || req.ReplyTo != "") {
+			reply(http.StatusBadRequest, sendReply{Error: "a forward sends the original as it is — no text or reply_to with it"})
+			return
+		}
+		if req.Forward == "" && strings.TrimSpace(req.Text) == "" {
 			reply(http.StatusBadRequest, sendReply{Error: "empty message text"})
 			return
 		}
@@ -154,7 +165,24 @@ func startSend(root string, deliver deliverFunc, quote quoteFunc, record func(*e
 		// A reply is the same text carrying a quote of its target — the
 		// shape textOf reads back, so recording links ZPARENTMESSAGE.
 		msg := &waE2E.Message{Conversation: proto.String(req.Text)}
-		if req.ReplyTo != "" {
+		var forwardOf int64
+		if req.Forward != "" {
+			src, err := source(ctx, req.Forward)
+			if err != nil {
+				reply(http.StatusBadRequest, sendReply{Error: "cannot forward: " + err.Error()})
+				return
+			}
+			var path string
+			var sum []byte
+			if src.Media != nil {
+				if path, sum, err = fetch(ctx, src); err != nil {
+					logf("forward of %s FAILED: %v", req.Forward, err)
+					reply(http.StatusBadGateway, sendReply{Error: "cannot forward: " + err.Error()})
+					return
+				}
+			}
+			msg, forwardOf = forwardMessage(src, path, sum), src.PK
+		} else if req.ReplyTo != "" {
 			quoted, err := quote(ctx, to, req.ReplyTo)
 			if err != nil {
 				reply(http.StatusBadRequest, sendReply{Error: "cannot reply: " + err.Error()})
@@ -170,7 +198,7 @@ func startSend(root string, deliver deliverFunc, quote quoteFunc, record func(*e
 			return
 		}
 		out := sendReply{Sent: Sent{ID: string(id), Chat: to.String(), Ts: ts.UTC().Format(time.RFC3339)}}
-		if err := record(sentEvent(to, id, ts, msg)); err != nil {
+		if err := record(sentEvent(to, id, ts, msg), forwardOf); err != nil {
 			out.Warning = "sent, but not recorded in the database: " + err.Error()
 		}
 		reply(http.StatusOK, out)
@@ -199,9 +227,10 @@ func startSend(root string, deliver deliverFunc, quote quoteFunc, record func(*e
 
 // StartFakeSend runs the real send endpoint for root with a stand-in
 // for WhatsApp: nothing reaches the wire, stanza IDs are FAKE1, FAKE2…,
-// and messages are recorded in the workspace database as usual. Test
-// support for the packages that drive sends from outside — the CLI and
-// the MCP server.
+// and messages are recorded in the workspace database as usual. A
+// forwarded attachment is taken as still on the CDN, with a fixed
+// plaintext hash. Test support for the packages that drive sends from
+// outside — the CLI and the MCP server.
 func StartFakeSend(root string) (stop func(), err error) {
 	w := &Writer{dbPath: filepath.Join(root, backup.ChatStorageName), root: root}
 	if err := w.EnsureReady(context.Background()); err != nil {
@@ -213,8 +242,12 @@ func StartFakeSend(root string) (stop func(), err error) {
 			return types.MessageID(fmt.Sprintf("FAKE%d", n.Add(1))), time.Now(), nil
 		},
 		w.quote,
-		func(v *events.Message) error {
-			_, err := w.Apply(context.Background(), decide(v, nil))
+		w.forwardSource,
+		func(_ context.Context, src forwardSource) (string, []byte, error) {
+			return src.Media.DirectPath, make([]byte, 32), nil
+		},
+		func(v *events.Message, forwardOf int64) error {
+			_, err := w.Apply(context.Background(), forwardPlan(decide(v, nil), forwardOf))
 			return err
 		})
 }
@@ -223,6 +256,16 @@ func StartFakeSend(root string) (stop func(), err error) {
 // text to a chat (see ParseChat for the accepted forms). A non-empty
 // replyTo is the stanza ID of a message in that chat to quote.
 func Send(ctx context.Context, root, to, text, replyTo string) (Sent, error) {
+	return post(ctx, root, sendRequest{To: to, Text: text, ReplyTo: replyTo})
+}
+
+// Forward asks the running live to forward the message with the given
+// stanza ID, from any chat, to chat `to`.
+func Forward(ctx context.Context, root, to, stanzaID string) (Sent, error) {
+	return post(ctx, root, sendRequest{To: to, Forward: stanzaID})
+}
+
+func post(ctx context.Context, root string, r sendRequest) (Sent, error) {
 	data, err := os.ReadFile(workspace.LiveEndpointPath(root))
 	if err != nil {
 		return Sent{}, ErrNotRunning
@@ -231,7 +274,7 @@ func Send(ctx context.Context, root, to, text, replyTo string) (Sent, error) {
 	if err := json.Unmarshal(data, &ep); err != nil {
 		return Sent{}, fmt.Errorf("parse %s: %w", workspace.LiveEndpointPath(root), err)
 	}
-	body, err := json.Marshal(sendRequest{To: to, Text: text, ReplyTo: replyTo})
+	body, err := json.Marshal(r)
 	if err != nil {
 		return Sent{}, err
 	}

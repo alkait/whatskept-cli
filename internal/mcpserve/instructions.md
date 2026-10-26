@@ -14,8 +14,9 @@ the three query tools:
 
 ## Sending — only when asked
 
-`send` delivers a text message from the user's own WhatsApp account;
-real people read it and it cannot be taken back.
+`send` delivers a text message from the user's own WhatsApp account,
+or forwards an existing one; real people read it and it cannot be
+taken back.
 
 - Send only when the user explicitly asked for it, in this
   conversation, with the wording and the recipient settled. When either
@@ -27,6 +28,12 @@ real people read it and it cannot be taken back.
 - To reply to a specific message, pass its `v_messages.stanza_id` as
   `reply_to` (not the rowid). It must be a message in the `to` chat and
   not deleted; the reply shows up with `reply_to_id` set.
+- To forward, pass the original's `v_messages.stanza_id` as `forward`
+  and no `text`. It may come from any chat; text, links, images, voice
+  notes and documents can be forwarded. Forwarding moves someone's
+  words or files into another chat: do it only when the user named
+  both the message and the destination. An expired attachment is
+  re-uploaded by the user's phone, which can take a few seconds.
 - The sent message is in the history immediately. A `warning` in the
   result means it went out but was not stored — do **not** resend.
 - "live is not running" means capture is stopped on the host; tell the

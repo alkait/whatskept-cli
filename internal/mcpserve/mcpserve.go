@@ -163,11 +163,13 @@ func newMCPServer(dbPath string) *mcp.Server {
 	}, s.search)
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name: "send",
-		Description: "Send a WhatsApp text message from the user's own account. `to` is a phone " +
-			"number in international format or a chat JID (v_chats.jid — the only way to " +
-			"address a group). Optional `reply_to` is the v_messages.stanza_id of a message " +
-			"in that chat to quote. Irreversible and seen by real people: send only what the user " +
-			"explicitly asked for, to the chat they named. Needs `whatskept live` running.",
+		Description: "Send a WhatsApp text message from the user's own account, or forward one. " +
+			"`to` is a phone number in international format or a chat JID (v_chats.jid — the only " +
+			"way to address a group). Optional `reply_to` is the v_messages.stanza_id of a message " +
+			"in that chat to quote. To forward instead, give `forward` (a v_messages.stanza_id from " +
+			"any chat: text, link, image, voice note or document) and no `text`. Irreversible and " +
+			"seen by real people: send only what the user explicitly asked for, to the chat they " +
+			"named. Needs `whatskept live` running.",
 	}, s.send)
 
 	return mcpServer
@@ -354,15 +356,25 @@ func clipString(s string) (string, int) {
 
 type sendIn struct {
 	To   string `json:"to" jsonschema:"phone number in international format (+971501234567) or a chat JID from v_chats.jid"`
-	Text string `json:"text" jsonschema:"the message text"`
+	Text string `json:"text,omitempty" jsonschema:"the message text; omit when forwarding"`
 	// ReplyTo quotes an earlier message, the way a reply does in the app.
 	ReplyTo string `json:"reply_to,omitempty" jsonschema:"optional: v_messages.stanza_id of a message in the same chat to reply to (quote)"`
+	// Forward sends an existing message on, marked forwarded.
+	Forward string `json:"forward,omitempty" jsonschema:"optional: v_messages.stanza_id of a message (any chat) to forward to 'to' — instead of text"`
 }
 
-// send hands the text to the live process of the workspace the
+// send hands the message to the live process of the workspace the
 // database sits in; live owns the WhatsApp connection.
 func (s *server) send(ctx context.Context, _ *mcp.CallToolRequest, in sendIn) (*mcp.CallToolResult, live.Sent, error) {
-	sent, err := live.Send(ctx, filepath.Dir(s.dbPath), in.To, in.Text, in.ReplyTo)
+	root := filepath.Dir(s.dbPath)
+	if in.Forward == "" {
+		sent, err := live.Send(ctx, root, in.To, in.Text, in.ReplyTo)
+		return nil, sent, err
+	}
+	if in.Text != "" || in.ReplyTo != "" {
+		return nil, live.Sent{}, errors.New("a forward sends the original as it is — leave text and reply_to empty")
+	}
+	sent, err := live.Forward(ctx, root, in.To, in.Forward)
 	return nil, sent, err
 }
 

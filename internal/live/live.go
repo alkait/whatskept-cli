@@ -129,10 +129,11 @@ func Run(ctx context.Context, root string) error {
 	}
 
 	// applyMsg writes one message event and returns a log suffix saying
-	// what happened, plus the write error if there was one.
-	applyMsg := func(v *events.Message) (string, error) {
+	// what happened, plus the write error if there was one. forwardOf
+	// is the original's Z_PK when v is a forward we sent, else 0.
+	applyMsg := func(v *events.Message, forwardOf int64) (string, error) {
 		ctx := context.Background()
-		res, err := w.Apply(ctx, decide(v, decryptSecret(ctx, client, v)))
+		res, err := w.Apply(ctx, forwardPlan(decide(v, decryptSecret(ctx, client, v)), forwardOf))
 		if err != nil {
 			writeErrs.Add(1)
 			return fmt.Sprintf(" write=ERROR(%v)", err), err
@@ -179,11 +180,17 @@ func Run(ctx context.Context, root string) error {
 		return true
 	}
 
+	// Forwards may need the phone to re-upload an attachment; its answer
+	// arrives as an event.
+	fetcher := newMediaFetcher(client)
+
 	client.AddEventHandler(func(evt any) {
 		switch v := evt.(type) {
+		case *events.MediaRetry:
+			fetcher.handle(v)
 		case *events.Message:
 			msgCount.Add(1)
-			outcome, _ := applyMsg(v)
+			outcome, _ := applyMsg(v, 0)
 			logMessage(v, outcome)
 		case *events.DeleteForMe:
 			// "Delete for me" does NOT travel as a revoke — WhatsApp
@@ -288,11 +295,13 @@ func Run(ctx context.Context, root string) error {
 			return resp.ID, resp.Timestamp, err
 		},
 		w.quote,
-		func(v *events.Message) error {
+		w.forwardSource,
+		fetcher.fetch,
+		func(v *events.Message, forwardOf int64) error {
 			if id := client.Store.ID; id != nil {
 				v.Info.Sender = id.ToNonAD()
 			}
-			outcome, err := applyMsg(v)
+			outcome, err := applyMsg(v, forwardOf)
 			logMessage(v, outcome)
 			return err
 		})
