@@ -345,6 +345,39 @@ func TestApplyStickerQueuedAsImage(t *testing.T) {
 	}
 }
 
+func TestApplyGIFQueuedVideoSkipped(t *testing.T) {
+	w, root := newTestWriter(t)
+	w.download = func(context.Context, downloadable) ([]byte, error) {
+		return []byte("mp4bytes"), nil
+	}
+	video := func(stanza string, gif bool) *events.Message {
+		ev := dmEvent(stanza, "")
+		ev.Message = &waE2E.Message{VideoMessage: &waE2E.VideoMessage{
+			DirectPath:  proto.String("/v/clip"),
+			GifPlayback: proto.Bool(gif),
+		}}
+		return ev
+	}
+	res, err := w.Apply(context.Background(), decide(video("G1", true), nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRel := filepath.Join(backup.UnenrichedDir, "media", "1.mp4")
+	if res.Action != actionInsert || res.MediaPath != wantRel {
+		t.Fatalf("res = %+v", res)
+	}
+	if _, err := os.Stat(filepath.Join(root, wantRel)); err != nil {
+		t.Errorf("queued file: %v", err)
+	}
+	var msgType int
+	if err := queryDB(t, w, `SELECT ZMESSAGETYPE FROM ZWAMESSAGE WHERE Z_PK = ?`, res.PK).Scan(&msgType); err != nil || msgType != 11 {
+		t.Errorf("type = %d, %v", msgType, err)
+	}
+	if p := decide(video("V1", false), nil); p.Action != actionSkip {
+		t.Errorf("ordinary video: action = %v, want skip", p.Action)
+	}
+}
+
 func TestApplyMediaDownloadFailureSkips(t *testing.T) {
 	w, root := newTestWriter(t)
 	w.download = func(context.Context, downloadable) ([]byte, error) {
@@ -379,6 +412,7 @@ func TestMediaPathFor(t *testing.T) {
 		{8, 3, "Media/x/a/b/uuid.opus", filepath.Join(backup.UnenrichedDir, "voice", "8.opus")},
 		{9, 8, "Media/x/a/b/uuid.docx", filepath.Join(backup.UnenrichedDir, "documents", "9.docx")},
 		{12, 15, "Media/x/a/b/uuid.webp", filepath.Join(backup.UnenrichedDir, "media", "12.webp")},
+		{13, 11, "Media/x/a/b/uuid.mp4", filepath.Join(backup.UnenrichedDir, "media", "13.mp4")},
 		{10, 0, "", ""},
 		{11, 14, "", ""},
 	}

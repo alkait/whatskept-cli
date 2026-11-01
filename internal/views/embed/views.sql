@@ -216,7 +216,7 @@ SELECT
         WHEN 7  THEN 'link'
         WHEN 8  THEN 'document'
         WHEN 10 THEN 'call'
-        WHEN 11 THEN 'system'
+        WHEN 11 THEN 'gif'
         WHEN 14 THEN 'deleted'
         WHEN 15 THEN 'sticker'
         ELSE 'other'

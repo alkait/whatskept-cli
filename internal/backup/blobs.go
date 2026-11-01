@@ -129,10 +129,11 @@ func (b *bundle) ExtractBlobs(root string, log func(string)) (BlobStats, error) 
 	return stats, nil
 }
 
-// imageSelection picks photos and stickers. Live's descriptions don't
-// survive a re-import, so stickers must be extracted here to get theirs
-// back.
-const imageSelection = "(m.ZMEDIALOCALPATH LIKE '%.jpg' OR m.ZMEDIALOCALPATH LIKE '%.webp')"
+// imageSelection picks photos, stickers and GIFs (type 11; ordinary
+// videos are also .mp4). Live's descriptions don't survive a re-import,
+// so stickers and GIFs must be extracted here to get theirs back.
+const imageSelection = "(m.ZMEDIALOCALPATH LIKE '%.jpg' OR m.ZMEDIALOCALPATH LIKE '%.webp' " +
+	"OR (wm.ZMESSAGETYPE = 11 AND m.ZMEDIALOCALPATH LIKE '%.mp4'))"
 
 // selectBlobCandidates returns the media rows matching where, ordered
 // by message rowid. `m` is ZWAMEDIAITEM, `wm` its ZWAMESSAGE.
@@ -255,6 +256,10 @@ func detectImageFormat(data []byte) (string, bool) {
 	case len(data) >= 8 && string(data[:8]) == "\x89PNG\r\n\x1a\n":
 		return "png", true
 	case len(data) >= 12 && string(data[4:8]) == "ftyp":
+		switch string(data[8:12]) {
+		case "isom", "iso2", "mp41", "mp42", "avc1", "M4V ":
+			return "mp4", true
+		}
 		return "heic", true
 	case len(data) >= 4 && string(data[:4]) == "GIF8":
 		return "gif", true

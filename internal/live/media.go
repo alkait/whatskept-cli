@@ -23,7 +23,9 @@ package live
 //
 // Video is deliberately not captured: it is the storage hog and
 // whatskept doesn't index it, so the next backup is the right place for
-// it. Stickers are small and go through image enrichment.
+// it. Stickers and GIFs are small and go through image enrichment. A
+// GIF is a video message with GifPlayback set, which a backup records
+// as ZMESSAGETYPE 11.
 
 import (
 	"fmt"
@@ -58,7 +60,7 @@ type downloadable interface {
 // before the transaction opens.
 type mediaPlan struct {
 	Source      downloadable
-	MessageType int    // ZMESSAGETYPE: 1 image, 3 audio, 8 document, 15 sticker
+	MessageType int    // ZMESSAGETYPE: 1 image, 3 audio, 8 document, 11 GIF, 15 sticker
 	Dir         string // queue subdirectory: media / voice / documents
 	Ext         string // file extension, including the dot
 	LocalPath   string // synthesized ZMEDIALOCALPATH
@@ -97,6 +99,16 @@ func classifyMedia(msg *waE2E.Message, chat types.JID) *mediaPlan {
 			Size:     st.GetFileLength(),
 			Mimetype: st.GetMimetype(),
 			KeyTime:  st.GetMediaKeyTimestamp(),
+		})
+
+	case msg.GetVideoMessage().GetGifPlayback():
+		gif := msg.GetVideoMessage()
+		return newMediaPlan(gif, chat, 11, "media", ".mp4", &mediaPlan{
+			Caption:  gif.GetCaption(),
+			Duration: gif.GetSeconds(),
+			Size:     gif.GetFileLength(),
+			Mimetype: gif.GetMimetype(),
+			KeyTime:  gif.GetMediaKeyTimestamp(),
 		})
 
 	case msg.GetAudioMessage() != nil:
@@ -175,6 +187,8 @@ func mediaPathFor(pk int64, msgType int, localPath string) string {
 		dir, ext = "media", ".jpg"
 	case 15:
 		dir, ext = "media", ".webp"
+	case 11:
+		dir, ext = "media", ".mp4"
 	case 3:
 		dir, ext = "voice", ".opus"
 	case 8:
@@ -197,6 +211,8 @@ func quotedIDOf(msg *waE2E.Message) string {
 		return msg.GetImageMessage().GetContextInfo().GetStanzaID()
 	case msg.GetStickerMessage() != nil:
 		return msg.GetStickerMessage().GetContextInfo().GetStanzaID()
+	case msg.GetVideoMessage() != nil:
+		return msg.GetVideoMessage().GetContextInfo().GetStanzaID()
 	case msg.GetAudioMessage() != nil:
 		return msg.GetAudioMessage().GetContextInfo().GetStanzaID()
 	case msg.GetDocumentMessage() != nil:

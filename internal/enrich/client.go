@@ -390,6 +390,7 @@ type contentPart struct {
 	Type       string          `json:"type"`
 	Text       string          `json:"text,omitempty"`
 	ImageURL   *imageURLPart   `json:"image_url,omitempty"`
+	VideoURL   *imageURLPart   `json:"video_url,omitempty"`
 	InputAudio *inputAudioPart `json:"input_audio,omitempty"`
 	File       *filePart       `json:"file,omitempty"`
 }

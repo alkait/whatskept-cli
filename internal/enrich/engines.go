@@ -41,6 +41,18 @@ const (
 		"has no readable text, write 'none'.\n\n" +
 		"DESCRIPTION: 1-2 factual sentences describing the scene, people, and objects."
 
+	// gifPrompt is imagePrompt for a clip: without being told to watch
+	// all of it, the model reports only the first frame.
+	gifPrompt = "You are indexing a personal chat archive. This is a short looping GIF: " +
+		"watch the whole clip, not just the first frame. Output EXACTLY two labeled " +
+		"sections and nothing else:\n\n" +
+		"TEXT: Transcribe every piece of text visible at any point in the clip VERBATIM, " +
+		"in its original language and script (Arabic, English, digits, @handles, prices, " +
+		"dates). Preserve the order it appears. Do NOT translate or summarize. If there " +
+		"is no readable text, write 'none'.\n\n" +
+		"DESCRIPTION: 1-2 factual sentences describing what happens in the clip, " +
+		"including the people and objects."
+
 	// voicePrompt asks for a verbatim, translation-free transcript in
 	// the original language (chats mix Arabic / English).
 	voicePrompt = "Transcribe this voice message verbatim. Output ONLY the " +
@@ -75,10 +87,17 @@ type imageResult struct {
 // an error so the run's accounting never loses spend.
 func describeImage(ctx context.Context, c *Client, ext string, data []byte) (imageResult, float64, error) {
 	dataURI := "data:" + mimeForImageExt(ext) + ";base64," + base64.StdEncoding.EncodeToString(data)
-	cr, err := c.complete(ctx, ImageModel, []contentPart{
+	parts := []contentPart{
 		{Type: "text", Text: imagePrompt},
 		{Type: "image_url", ImageURL: &imageURLPart{URL: dataURI}},
-	}, nil, imageMaxOutputTokens, 0.1)
+	}
+	if ext == "mp4" {
+		parts = []contentPart{
+			{Type: "text", Text: gifPrompt},
+			{Type: "video_url", VideoURL: &imageURLPart{URL: dataURI}},
+		}
+	}
+	cr, err := c.complete(ctx, ImageModel, parts, nil, imageMaxOutputTokens, 0.1)
 	if err != nil {
 		return imageResult{}, cr.cost(), err
 	}
@@ -320,6 +339,8 @@ func mimeForImageExt(ext string) string {
 		return "image/heic"
 	case "webp":
 		return "image/webp"
+	case "mp4":
+		return "video/mp4"
 	default:
 		return "image/jpeg"
 	}

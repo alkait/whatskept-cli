@@ -290,6 +290,27 @@ func TestRunEnrichesSticker(t *testing.T) {
 	}
 }
 
+func TestRunEnrichesGIFAsVideo(t *testing.T) {
+	root := writeWorkspace(t, 1)
+	writeQueued(t, root, "media", "1.mp4")
+	var gotVideo atomic.Bool
+	c, _ := newTestClient(t, 200, func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		gotVideo.Store(bytes.Contains(body, []byte(`"video_url":{"url":"data:video/mp4;base64,`)))
+		chatOK(w, "TEXT: none\n\nDESCRIPTION: a dancing cat")
+	})
+	if _, err := run(t, root, c, 1, false); err != nil {
+		t.Fatal(err)
+	}
+	if !gotVideo.Load() {
+		t.Error("GIF not sent as video_url")
+	}
+	got := query1(t, filepath.Join(root, "ChatStorage.sqlite"), `SELECT description FROM wa_image_text WHERE rowid = 1`)
+	if got != "a dancing cat" {
+		t.Errorf("description = %q", got)
+	}
+}
+
 func TestRunTransientStaysQueued(t *testing.T) {
 	root := writeWorkspace(t, 1)
 	path := writeQueued(t, root, "voice", "1.opus")
