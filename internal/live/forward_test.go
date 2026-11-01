@@ -79,16 +79,22 @@ func importedMedia(t *testing.T, w *Writer) {
 			(51, 1, 0, 3, '971500000001@s.whatsapp.net', 'VOICE'),
 			(52, 1, 0, 8, '971500000001@s.whatsapp.net', 'PDF'),
 			(53, 1, 0, 3, '971500000001@s.whatsapp.net', 'SONG'),
-			(54, 1, 0, 15, '971500000001@s.whatsapp.net', 'STICKER'),
+			(54, 1, 0, 5, '971500000001@s.whatsapp.net', 'PLACE'),
 			(55, 1, 0, 1, '971500000001@s.whatsapp.net', 'LIVEIMG'),
-			(56, 1, 0, 14, '971500000001@s.whatsapp.net', 'GONE');
+			(56, 1, 0, 14, '971500000001@s.whatsapp.net', 'GONE'),
+			(57, 1, 0, 2, '971500000001@s.whatsapp.net', 'VIDEO'),
+			(58, 1, 0, 11, '971500000001@s.whatsapp.net', 'GIF'),
+			(59, 1, 0, 15, '971500000001@s.whatsapp.net', 'STICKER');
 		INSERT INTO ZWAMEDIAITEM (Z_PK, ZMESSAGE, ZMEDIALOCALPATH, ZFILESIZE, ZMOVIEDURATION,
 		                          ZAUTHORNAME, ZTITLE, ZMEDIAKEY, ZMETADATA, ZVCARDSTRING) VALUES
 			(1, 50, 'Media/x/a.jpg',  1234, 0, NULL, 'the receipt', ?1, ?2, 'image/jpeg'),
 			(2, 51, 'Media/x/b.opus', 999,  7, NULL, NULL,          ?1, ?2, 'audio/ogg; codecs=opus'),
 			(3, 52, 'Media/x/c.pdf',  5555, 0, 'scan.pdf', NULL,    ?1, ?2, 'application/pdf'),
 			(4, 53, 'Media/x/d.mp3',  777,  0, NULL, NULL,          ?1, ?2, 'audio/mpeg'),
-			(5, 55, 'Media/x/e.jpg',  1234, 0, NULL, NULL,          NULL, NULL, NULL);
+			(5, 55, 'Media/x/e.jpg',  1234, 0, NULL, NULL,          NULL, NULL, NULL),
+			(6, 57, 'Media/x/f.mp4',  4000, 30, NULL, 'holiday',    ?1, ?2, 'video/mp4'),
+			(7, 58, 'Media/x/g.mp4',  500,  3, NULL, NULL,          ?1, ?2, 'video/mp4'),
+			(8, 59, 'Media/x/h.webp', 200,  0, NULL, NULL,          ?1, ?2, 'image/webp');
 		CREATE TABLE wa_image_text (rowid INTEGER PRIMARY KEY, ocr_text TEXT, description TEXT,
 			language TEXT, source TEXT, model TEXT, generated_at TEXT);
 		INSERT INTO wa_image_text VALUES (50, 'TOTAL 42.00', 'a supermarket receipt', 'en', 'photo', 'm', 't');`,
@@ -191,6 +197,59 @@ func TestForwardMedia(t *testing.T) {
 	}
 }
 
+// Each stays its own kind of message, recorded as such in the
+// destination chat.
+func TestForwardVideoGIFSticker(t *testing.T) {
+	w, root, wire := sendFixture(t)
+	importedMedia(t, w)
+	ctx := context.Background()
+	recorded := func(id string) int {
+		t.Helper()
+		var msgType int
+		if err := queryDB(t, w, `SELECT ZMESSAGETYPE FROM ZWAMESSAGE WHERE ZSTANZAID = ?`, id).Scan(&msgType); err != nil {
+			t.Fatal(err)
+		}
+		return msgType
+	}
+
+	sent, err := Forward(ctx, root, "+971500000002", "VIDEO")
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := wire.msgs[0].GetVideoMessage()
+	if v == nil || v.GetGifPlayback() || v.GetSeconds() != 30 || v.GetCaption() != "holiday" ||
+		v.GetMimetype() != "video/mp4" || !v.GetContextInfo().GetIsForwarded() {
+		t.Errorf("video = %v", v)
+	}
+	if got := recorded(sent.ID); got != 2 {
+		t.Errorf("video recorded as type %d", got)
+	}
+
+	if sent, err = Forward(ctx, root, "+971500000002", "GIF"); err != nil {
+		t.Fatal(err)
+	}
+	if g := wire.msgs[1].GetVideoMessage(); g == nil || !g.GetGifPlayback() {
+		t.Errorf("gif = %v", g)
+	}
+	if got := recorded(sent.ID); got != 11 {
+		t.Errorf("GIF recorded as type %d", got)
+	}
+
+	if sent, err = Forward(ctx, root, "+971500000002", "STICKER"); err != nil {
+		t.Fatal(err)
+	}
+	st := wire.msgs[2].GetStickerMessage()
+	if st == nil || st.GetMimetype() != "image/webp" || !st.GetContextInfo().GetIsForwarded() {
+		t.Errorf("sticker = %v", st)
+	}
+	if got := recorded(sent.ID); got != 15 {
+		t.Errorf("sticker recorded as type %d", got)
+	}
+	if entries, _ := os.ReadDir(filepath.Join(root, backup.UnenrichedDir, "media")); len(entries) != 0 {
+		t.Errorf("queued %d file(s) for forwards", len(entries))
+	}
+}
+
 // Media live captured itself forwards like imported media: capture
 // stores the download details forward reads.
 func TestForwardLiveCapture(t *testing.T) {
@@ -237,7 +296,7 @@ func TestForwardRefusals(t *testing.T) {
 		{"NOPE", "no message with stanza ID"},
 		{"GONE", "was deleted"},
 		{"SONG", "only voice notes"},
-		{"STICKER", "cannot be forwarded yet"},
+		{"PLACE", "cannot be forwarded yet"},
 		{"LIVEIMG", "download details are not stored"},
 	} {
 		_, err := Forward(context.Background(), root, "+971500000002", c.id)

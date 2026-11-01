@@ -167,7 +167,7 @@ func newMCPServer(dbPath string) *mcp.Server {
 			"`to` is a phone number in international format or a chat JID (v_chats.jid — the only " +
 			"way to address a group). Optional `reply_to` is the v_messages.stanza_id of a message " +
 			"in that chat to quote. To forward instead, give `forward` (a v_messages.stanza_id from " +
-			"any chat: text, link, image, voice note or document) and no `text`. Irreversible and " +
+			"any chat: text, link, image, video, GIF, sticker, voice note or document) and no `text`. Irreversible and " +
 			"seen by real people: send only what the user explicitly asked for, to the chat they " +
 			"named. Needs `whatskept live` running.",
 	}, s.send)
@@ -433,6 +433,10 @@ func (s *server) search(ctx context.Context, _ *mcp.CallToolRequest, in searchIn
 	// tables exist (SQLite errors on a missing table, it does not null it).
 	sel := []string{"NULLIF(m.text, '')"}
 	joins := []string{}
+	if has["wa_image_text"] && has["wa_voice_text"] {
+		// A video has both; one alone would hide the other.
+		sel = append(sel, "NULLIF(t.description, '') || char(10) || NULLIF(v.transcript, '')")
+	}
 	if has["wa_image_text"] {
 		sel = append(sel, "NULLIF(t.description, '')", "NULLIF(t.ocr_text, '')")
 		joins = append(joins, "LEFT JOIN wa_image_text t ON t.rowid = m.rowid")

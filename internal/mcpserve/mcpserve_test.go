@@ -233,6 +233,32 @@ func TestSearch(t *testing.T) {
 	}
 }
 
+func TestSearchVideoShowsDescriptionAndSpeech(t *testing.T) {
+	path := writeFixtureDB(t)
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS wa_image_text (rowid INTEGER PRIMARY KEY, ocr_text TEXT, description TEXT,
+			language TEXT, source TEXT, model TEXT, generated_at TEXT);
+		CREATE TABLE IF NOT EXISTS wa_voice_text (rowid INTEGER PRIMARY KEY, transcript TEXT,
+			language TEXT, duration_sec REAL, model TEXT, generated_at TEXT);
+		INSERT INTO ZWAMESSAGE (Z_PK, ZCHATSESSION, ZMESSAGETYPE) VALUES (70, 1, 2);
+		INSERT INTO wa_image_text VALUES (70, '', 'a hand points at a laptop', '', 'cloud', 'm', 't');
+		INSERT INTO wa_voice_text VALUES (70, 'this is my keyboard', '', NULL, 'm', 't');
+		INSERT INTO messages_fts (rowid, text) VALUES (70, 'a hand points at a laptop this is my keyboard');`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	var out searchOut
+	call(t, connect(t, path), "search", map[string]any{"query": "keyboard"}, &out)
+	if len(out.Hits) != 1 || out.Hits[0].Text != "a hand points at a laptop\nthis is my keyboard" {
+		t.Errorf("hits = %+v", out.Hits)
+	}
+}
+
 func TestToolsWithoutDatabase(t *testing.T) {
 	sess := connect(t, filepath.Join(t.TempDir(), "ChatStorage.sqlite"))
 	res := call(t, sess, "query", map[string]any{"sql": "SELECT 1"}, nil)

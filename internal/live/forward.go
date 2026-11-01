@@ -40,7 +40,7 @@ import (
 type forwardSource struct {
 	PK     int64
 	Stanza string
-	Type   int    // ZMESSAGETYPE: 0 text, 7 link, 1 image, 3 voice note, 8 document
+	Type   int    // ZMESSAGETYPE: 0 text, 7 link, 1 image, 2 video, 3 voice note, 8 document, 11 GIF, 15 sticker
 	Text   string // text and link messages
 
 	// Where the original sits — what a re-upload request names.
@@ -128,9 +128,9 @@ func (w *Writer) forwardSource(ctx context.Context, stanzaID string) (forwardSou
 		if !strings.HasSuffix(localPath.String, ".opus") {
 			return forwardSource{}, fmt.Errorf("message %s is an audio file — only voice notes can be forwarded", stanzaID)
 		}
-	case 1, 8:
+	case 1, 2, 8, 11, 15:
 	default:
-		return forwardSource{}, fmt.Errorf("message %s is of a type that cannot be forwarded yet (ZMESSAGETYPE %d) — text, links, images, voice notes and documents can", stanzaID, src.Type)
+		return forwardSource{}, fmt.Errorf("message %s is of a type that cannot be forwarded yet (ZMESSAGETYPE %d) — text, links, images, videos, GIFs, stickers, voice notes and documents can", stanzaID, src.Type)
 	}
 
 	if len(key) == 0 || len(meta) == 0 {
@@ -142,7 +142,10 @@ func (w *Writer) forwardSource(ctx context.Context, stanzaID string) (forwardSou
 	}
 	m.Mimetype = mime.String
 	if m.Mimetype == "" {
-		m.Mimetype = map[int]string{1: "image/jpeg", 3: "audio/ogg; codecs=opus", 8: "application/octet-stream"}[src.Type]
+		m.Mimetype = map[int]string{
+			1: "image/jpeg", 2: "video/mp4", 3: "audio/ogg; codecs=opus",
+			8: "application/octet-stream", 11: "video/mp4", 15: "image/webp",
+		}[src.Type]
 	}
 	m.Size = uint64(size.Int64)
 	m.Caption = caption.String
@@ -260,6 +263,17 @@ func forwardMessage(src forwardSource, directPath string, fileSHA256 []byte) *wa
 			URL: url, DirectPath: &directPath, MediaKey: m.MediaKey, MediaKeyTimestamp: &m.KeyTimestamp,
 			FileEncSHA256: m.FileEncSHA256, FileSHA256: fileSHA256, FileLength: &m.Size,
 			Mimetype: &m.Mimetype, Caption: nilIfEmpty(m.Caption), ContextInfo: ci}}
+	case 2, 11:
+		return &waE2E.Message{VideoMessage: &waE2E.VideoMessage{
+			URL: url, DirectPath: &directPath, MediaKey: m.MediaKey, MediaKeyTimestamp: &m.KeyTimestamp,
+			FileEncSHA256: m.FileEncSHA256, FileSHA256: fileSHA256, FileLength: &m.Size,
+			Mimetype: &m.Mimetype, Seconds: &m.Seconds, Caption: nilIfEmpty(m.Caption),
+			GifPlayback: proto.Bool(src.Type == 11), ContextInfo: ci}}
+	case 15:
+		return &waE2E.Message{StickerMessage: &waE2E.StickerMessage{
+			URL: url, DirectPath: &directPath, MediaKey: m.MediaKey, MediaKeyTimestamp: &m.KeyTimestamp,
+			FileEncSHA256: m.FileEncSHA256, FileSHA256: fileSHA256, FileLength: &m.Size,
+			Mimetype: &m.Mimetype, ContextInfo: ci}}
 	case 3:
 		return &waE2E.Message{AudioMessage: &waE2E.AudioMessage{
 			URL: url, DirectPath: &directPath, MediaKey: m.MediaKey, MediaKeyTimestamp: &m.KeyTimestamp,
@@ -329,7 +343,10 @@ func (f *mediaFetcher) fetch(ctx context.Context, src forwardSource) (string, []
 // check fails by design — but only after the ciphertext hash and the
 // MAC have verified the bytes, and it returns them regardless.
 func (f *mediaFetcher) download(ctx context.Context, src forwardSource, path string) ([]byte, error) {
-	mt := map[int]whatsmeow.MediaType{1: whatsmeow.MediaImage, 3: whatsmeow.MediaAudio, 8: whatsmeow.MediaDocument}[src.Type]
+	mt := map[int]whatsmeow.MediaType{
+		1: whatsmeow.MediaImage, 2: whatsmeow.MediaVideo, 3: whatsmeow.MediaAudio,
+		8: whatsmeow.MediaDocument, 11: whatsmeow.MediaVideo, 15: whatsmeow.MediaImage,
+	}[src.Type]
 	data, err := f.client.DownloadMediaWithPath(ctx, path, src.Media.FileEncSHA256, nil, src.Media.MediaKey, mt, "", true)
 	if errors.Is(err, whatsmeow.ErrInvalidMediaSHA256) && len(data) > 0 {
 		return data, nil
