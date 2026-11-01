@@ -25,7 +25,9 @@ const (
 )
 
 const (
-	imageMaxOutputTokens = 700
+	// imageMaxOutputTokens leaves room for the model's mandatory
+	// reasoning, which is billed against the same limit as the reply.
+	imageMaxOutputTokens = 2000
 	voiceMaxOutputTokens = 8192 // a 10-minute voice note transcribes to thousands of tokens
 	docMaxOutputTokens   = 8    // the reply is a no-op ack; text arrives via annotations
 
@@ -82,6 +84,13 @@ func describeImage(ctx context.Context, c *Client, ext string, data []byte) (ima
 		return imageResult{}, cr.cost(), err
 	}
 	ocr, desc := splitTextDescription(cr.Choices[0].Message.Content)
+	// Success deletes the image, so a blank or cut-off reply must not
+	// count as one. Permanent, not transient: failed/ keeps the file
+	// without paying to retry it forever.
+	if reason := cr.Choices[0].FinishReason; reason == "length" || (ocr == "" && desc == "") {
+		return imageResult{}, cr.cost(), &Error{Class: ClassPermanent,
+			Msg: fmt.Sprintf("unusable image reply (finish_reason=%q, %d chars)", reason, len(cr.Choices[0].Message.Content))}
+	}
 	return imageResult{OCRText: ocr, Description: desc}, cr.cost(), nil
 }
 

@@ -232,6 +232,31 @@ func TestRunModerationQuarantines(t *testing.T) {
 	}
 }
 
+func TestRunUnusableImageReplyKeepsFile(t *testing.T) {
+	for name, body := range map[string]string{
+		"empty":   `{"choices":[{"message":{"content":""},"finish_reason":"stop"}]}`,
+		"cut off": `{"choices":[{"message":{"content":"TEXT: none\n\nDESCRIPTION: a man wearing"},"finish_reason":"length"}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := writeWorkspace(t, 1)
+			writeQueued(t, root, "media", "1.jpg")
+			c, _ := newTestClient(t, 200, func(w http.ResponseWriter, r *http.Request) {
+				fmt.Fprint(w, body)
+			})
+			if _, err := run(t, root, c, 1, false); err != nil {
+				t.Fatal(err)
+			}
+			if n := query1(t, filepath.Join(root, "ChatStorage.sqlite"), `SELECT COUNT(*) FROM wa_image_text`); n != "0" {
+				t.Errorf("wa_image_text rows = %s, want 0", n)
+			}
+			kept := filepath.Join(root, ".unenriched", "media", FailedDir, "1.jpg")
+			if _, err := os.Stat(kept); err != nil {
+				t.Errorf("image not kept in failed/: %v", err)
+			}
+		})
+	}
+}
+
 func TestRunTransientStaysQueued(t *testing.T) {
 	root := writeWorkspace(t, 1)
 	path := writeQueued(t, root, "voice", "1.opus")

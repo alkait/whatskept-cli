@@ -417,6 +417,7 @@ type chatResponse struct {
 			Content     string           `json:"content"`
 			Annotations []fileAnnotation `json:"annotations"`
 		} `json:"message"`
+		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
 	Usage *struct {
 		Cost float64 `json:"cost"` // USD; present because we set usage.include
