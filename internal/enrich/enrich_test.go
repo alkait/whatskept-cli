@@ -1,10 +1,11 @@
 package enrich
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -70,20 +71,29 @@ func writeQueued(t *testing.T, root, kindDir, name string) string {
 	return path
 }
 
-// perModel answers /chat/completions by the requested model: images get
+// requestKind tells a completion request apart by its content: images
+// and voice can share a model, so the model name doesn't identify them.
+func requestKind(r *http.Request) string {
+	body, _ := io.ReadAll(r.Body)
+	switch {
+	case bytes.Contains(body, []byte(`"image_url"`)):
+		return "image"
+	case bytes.Contains(body, []byte(`"input_audio"`)):
+		return "voice"
+	}
+	return "document"
+}
+
+// perModel answers /chat/completions by the kind of request: images get
 // a TEXT/DESCRIPTION reply, voice a transcript, documents a file
 // annotation. calls counts every completion request.
 func perModel(calls *atomic.Int64) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
-		var req struct {
-			Model string `json:"model"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		switch req.Model {
-		case ImageModel:
+		switch requestKind(r) {
+		case "image":
 			chatOK(w, "TEXT: total 45 AED\n\nDESCRIPTION: a cafe receipt")
-		case VoiceModel:
+		case "voice":
 			chatOK(w, "remember the tickets tomorrow")
 		default:
 			fmt.Fprint(w, `{"choices":[{"message":{"content":"ok","annotations":[`+
@@ -481,12 +491,8 @@ func TestRunWritesAttemptLog(t *testing.T) {
 	writeQueued(t, root, "media", "99.jpg") // orphan
 	var calls atomic.Int64
 	c, _ := newTestClient(t, 200, func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Model string `json:"model"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
 		calls.Add(1)
-		if req.Model == ImageModel {
+		if requestKind(r) == "image" {
 			w.WriteHeader(403)
 			fmt.Fprint(w, `{"error":{"code":403,"message":"flagged","metadata":{"reasons":["x"]}}}`)
 			return
