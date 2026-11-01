@@ -21,11 +21,10 @@ package live
 //   - Files land at .unenriched/<dir>/<Z_PK><ext>, the layout import's
 //     extractors write and enrichment reads.
 //
-// Video is deliberately not captured: it is the storage hog and
-// whatskept doesn't index it, so the next backup is the right place for
-// it. Stickers and GIFs are small and go through image enrichment. A
-// GIF is a video message with GifPlayback set, which a backup records
-// as ZMESSAGETYPE 11.
+// Stickers and GIFs are small and go through image enrichment. A GIF is
+// a video message with GifPlayback set, which a backup records as
+// ZMESSAGETYPE 11. Video is the storage hog, so one is only downloaded
+// when enrichment can take it; a longer one gets a row and no file.
 
 import (
 	"fmt"
@@ -42,6 +41,13 @@ import (
 // Core Data entity ID for WAMediaItem, read from a real workspace's
 // Z_PRIMARYKEY alongside the three in writer.go.
 const entMediaItem = 8
+
+// Videos past either limit are recorded but not downloaded. The size is
+// what fits the provider's 20 MB request once base64-encoded.
+const (
+	videoMaxBytes   = 15_000_000
+	videoMaxSeconds = 120
+)
 
 // downloadable mirrors whatsmeow.DownloadableMessage. Redeclared here so
 // classification stays a pure function over the protobuf types, and so
@@ -60,7 +66,7 @@ type downloadable interface {
 // before the transaction opens.
 type mediaPlan struct {
 	Source      downloadable
-	MessageType int    // ZMESSAGETYPE: 1 image, 3 audio, 8 document, 11 GIF, 15 sticker
+	MessageType int    // ZMESSAGETYPE: 1 image, 2 video, 3 audio, 8 document, 11 GIF, 15 sticker
 	Dir         string // queue subdirectory: media / voice / documents
 	Ext         string // file extension, including the dot
 	LocalPath   string // synthesized ZMEDIALOCALPATH
@@ -70,6 +76,7 @@ type mediaPlan struct {
 	KeyTime     int64  // media key timestamp, stored in ZMEDIAKEY
 	Duration    uint32 // ZWAMEDIAITEM.ZMOVIEDURATION (voice notes)
 	Size        uint64 // ZWAMEDIAITEM.ZFILESIZE
+	RowOnly     bool   // record the message but download nothing
 
 	// CopyFrom is set on a forward we sent: the Z_PK of the original.
 	// Nothing is downloaded; the original's derived text is copied.
@@ -110,6 +117,23 @@ func classifyMedia(msg *waE2E.Message, chat types.JID) *mediaPlan {
 			Mimetype: gif.GetMimetype(),
 			KeyTime:  gif.GetMediaKeyTimestamp(),
 		})
+
+	case msg.GetVideoMessage() != nil:
+		vid := msg.GetVideoMessage()
+		// .m4v only in the queue: it tells enrichment this is a video,
+		// not a GIF. The local path stays .mp4, as a backup records it.
+		p := newMediaPlan(vid, chat, 2, "media", ".m4v", &mediaPlan{
+			Caption:  vid.GetCaption(),
+			Duration: vid.GetSeconds(),
+			Size:     vid.GetFileLength(),
+			Mimetype: vid.GetMimetype(),
+			KeyTime:  vid.GetMediaKeyTimestamp(),
+			RowOnly:  vid.GetFileLength() > videoMaxBytes || vid.GetSeconds() > videoMaxSeconds,
+		})
+		if p != nil {
+			p.LocalPath = mediaLocalPath(chat, ".mp4")
+		}
+		return p
 
 	case msg.GetAudioMessage() != nil:
 		aud := msg.GetAudioMessage()
@@ -189,6 +213,8 @@ func mediaPathFor(pk int64, msgType int, localPath string) string {
 		dir, ext = "media", ".webp"
 	case 11:
 		dir, ext = "media", ".mp4"
+	case 2:
+		dir, ext = "media", ".m4v"
 	case 3:
 		dir, ext = "voice", ".opus"
 	case 8:

@@ -62,8 +62,9 @@ image OCR + descriptions (`wa_image_text`), voice transcripts
 (`wa_document_text`), and link-preview headlines. So use the `search`
 tool (or `messages_fts MATCH` in `query`) for topical lookups. **Never**
 conclude "X isn't in the chats" from `WHERE text LIKE '%X%'` — media
-surfaces are usually where the answer is. Videos are the one
-unsearchable type.
+surfaces are usually where the answer is. Live-captured videos up to
+2 minutes are searchable too (description, on-screen text, speech);
+longer or older ones are only rows with a caption, if any.
 
 For media hits `v_messages.text` is NULL; the `search` tool already
 COALESCEs the matching side-table text into its `text` field. In your

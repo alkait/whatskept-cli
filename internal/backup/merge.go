@@ -83,6 +83,12 @@ func mergeForward(livePath, tempPath string) error {
 		}
 	}
 
+	if hasLedger > 0 {
+		if err := carryLiveVideoText(db); err != nil {
+			return err
+		}
+	}
+
 	var hasReactions int
 	if err := db.QueryRow(
 		`SELECT COUNT(*) FROM old.sqlite_master WHERE type = 'table' AND name = 'wa_reaction'`,
@@ -95,6 +101,37 @@ func mergeForward(livePath, tempPath string) error {
 			WHERE ts > (SELECT datetime(MAX(ZMESSAGEDATE) + 978307200, 'unixepoch')
 			            FROM main.ZWAMESSAGE)`); err != nil {
 			return fmt.Errorf("copy wa_reaction rows: %w", err)
+		}
+	}
+	return nil
+}
+
+// carryLiveVideoText moves live videos' text onto their backup rows,
+// matched by stanza ID. Photos, stickers and GIFs are enriched again
+// from the backup's files; import skips videos, so this text would
+// otherwise be lost.
+func carryLiveVideoText(db *sql.DB) error {
+	for table, cols := range map[string]string{
+		"wa_image_text": "ocr_text, description, language, source, model, generated_at",
+		"wa_voice_text": "transcript, language, duration_sec, model, generated_at",
+	} {
+		var exists int
+		if err := db.QueryRow(
+			`SELECT COUNT(*) FROM old.sqlite_master WHERE type = 'table' AND name = ?`, table,
+		).Scan(&exists); err != nil {
+			return fmt.Errorf("check %s: %w", table, err)
+		}
+		if exists == 0 {
+			continue
+		}
+		if _, err := db.Exec(fmt.Sprintf(`
+			INSERT OR REPLACE INTO main.%[1]s (rowid, %[2]s)
+			SELECT nm.Z_PK, %[2]s
+			FROM   old.%[1]s t
+			JOIN   old.wa_live_pk l ON l.pk = t.rowid
+			JOIN   old.ZWAMESSAGE om ON om.Z_PK = t.rowid AND om.ZMESSAGETYPE = 2
+			JOIN   main.ZWAMESSAGE nm ON nm.ZSTANZAID = om.ZSTANZAID`, table, cols)); err != nil {
+			return fmt.Errorf("carry %s: %w", table, err)
 		}
 	}
 	return nil

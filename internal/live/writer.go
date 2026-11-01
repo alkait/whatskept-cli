@@ -443,7 +443,7 @@ func (w *Writer) Apply(ctx context.Context, p plan) (Result, error) {
 	// A download that fails is a skip, not an error: the message is on
 	// the phone and the next backup brings the row and the file together,
 	// which is strictly better than a row pointing at nothing.
-	if p.Media != nil && p.Media.CopyFrom == 0 {
+	if p.Media != nil && p.Media.CopyFrom == 0 && !p.Media.RowOnly {
 		if w.download == nil {
 			return Result{Action: actionSkip, Reason: "media capture disabled"}, nil
 		}
@@ -615,14 +615,18 @@ func (w *Writer) applyInsert(ctx context.Context, tx *sql.Tx, p plan) (Result, e
 		if err := insertMediaItem(ctx, tx, pk, p.Media); err != nil {
 			return Result{}, err
 		}
-		if p.Media.CopyFrom == 0 {
+		switch {
+		case p.Media.RowOnly:
+		case p.Media.CopyFrom == 0:
 			tmp, final, rel, err := w.stageMediaFile(pk, p.Media)
 			if err != nil {
 				return Result{}, err
 			}
 			res.mediaTmp, res.mediaFinal, res.MediaPath = tmp, final, rel
-		} else if err := copyDerivedText(ctx, tx, p.Media.CopyFrom, pk); err != nil {
-			return Result{}, err
+		default:
+			if err := copyDerivedText(ctx, tx, p.Media.CopyFrom, pk); err != nil {
+				return Result{}, err
+			}
 		}
 	}
 

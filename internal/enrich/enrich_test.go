@@ -311,6 +311,51 @@ func TestRunEnrichesGIFAsVideo(t *testing.T) {
 	}
 }
 
+func TestRunEnrichesVideoWithSpeech(t *testing.T) {
+	root := writeWorkspace(t, 1, 2)
+	writeQueued(t, root, "media", "1.m4v")
+	writeQueued(t, root, "media", "2.m4v")
+	c, _ := newTestClient(t, 200, func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if !bytes.Contains(body, []byte(`"video_url":{"url":"data:video/mp4;base64,`)) ||
+			!bytes.Contains(body, []byte("SPEECH:")) {
+			t.Error("video not sent with the video prompt")
+		}
+		chatOK(w, "Here is the index:\n\nTEXT: @handle\n\nSPEECH: مرحبا يا جماعة\n\nDESCRIPTION: a man talking")
+	})
+	if _, err := run(t, root, c, 1, false); err != nil {
+		t.Fatal(err)
+	}
+	db := filepath.Join(root, "ChatStorage.sqlite")
+	if got := query1(t, db, `SELECT ocr_text FROM wa_image_text WHERE rowid = 1`); got != "@handle" {
+		t.Errorf("ocr_text = %q", got)
+	}
+	if got := query1(t, db, `SELECT description FROM wa_image_text WHERE rowid = 1`); got != "a man talking" {
+		t.Errorf("description = %q", got)
+	}
+	if got := query1(t, db, `SELECT transcript FROM wa_voice_text WHERE rowid = 1`); got != "مرحبا يا جماعة" {
+		t.Errorf("transcript = %q", got)
+	}
+}
+
+func TestRunVideoWithoutSpeechHasNoTranscript(t *testing.T) {
+	root := writeWorkspace(t, 1)
+	writeQueued(t, root, "media", "1.m4v")
+	c, _ := newTestClient(t, 200, func(w http.ResponseWriter, r *http.Request) {
+		chatOK(w, "TEXT: none\n\nSPEECH: None.\n\nDESCRIPTION: men greeting")
+	})
+	if _, err := run(t, root, c, 1, false); err != nil {
+		t.Fatal(err)
+	}
+	db := filepath.Join(root, "ChatStorage.sqlite")
+	if got := query1(t, db, `SELECT COUNT(*) FROM wa_voice_text`); got != "0" {
+		t.Errorf("transcripts = %s, want 0", got)
+	}
+	if got := query1(t, db, `SELECT ocr_text FROM wa_image_text WHERE rowid = 1`); got != "" {
+		t.Errorf("ocr_text = %q", got)
+	}
+}
+
 func TestRunTransientStaysQueued(t *testing.T) {
 	root := writeWorkspace(t, 1)
 	path := writeQueued(t, root, "voice", "1.opus")

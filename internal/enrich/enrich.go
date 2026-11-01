@@ -375,11 +375,28 @@ func process(ctx context.Context, c *Client, it item) outcome {
 			return outcome{it: it, costUSD: cost, err: err}
 		}
 		return outcome{it: it, costUSD: cost, write: func(db *sql.DB) error {
-			_, err := db.Exec(`INSERT OR REPLACE INTO wa_image_text
+			tx, err := db.Begin()
+			if err != nil {
+				return err
+			}
+			defer tx.Rollback()
+			// A video's speech is a transcript like a voice note's, so
+			// it joins the same searchable surface.
+			if res.Speech != "" {
+				if _, err := tx.Exec(`INSERT OR REPLACE INTO wa_voice_text
+					(rowid, transcript, language, duration_sec, model, generated_at)
+					VALUES (?, ?, '', NULL, ?, ?)`,
+					it.rowid, res.Speech, ImageModel, now); err != nil {
+					return err
+				}
+			}
+			if _, err := tx.Exec(`INSERT OR REPLACE INTO wa_image_text
 				(rowid, ocr_text, description, language, source, model, generated_at)
 				VALUES (?, ?, ?, '', 'cloud', ?, ?)`,
-				it.rowid, res.OCRText, res.Description, ImageModel, now)
-			return err
+				it.rowid, res.OCRText, res.Description, ImageModel, now); err != nil {
+				return err
+			}
+			return tx.Commit()
 		}}
 	case "voice":
 		transcript, cost, err := transcribeVoice(ctx, c, data)

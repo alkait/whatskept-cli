@@ -345,7 +345,7 @@ func TestApplyStickerQueuedAsImage(t *testing.T) {
 	}
 }
 
-func TestApplyGIFQueuedVideoSkipped(t *testing.T) {
+func TestApplyGIFQueued(t *testing.T) {
 	w, root := newTestWriter(t)
 	w.download = func(context.Context, downloadable) ([]byte, error) {
 		return []byte("mp4bytes"), nil
@@ -373,8 +373,69 @@ func TestApplyGIFQueuedVideoSkipped(t *testing.T) {
 	if err := queryDB(t, w, `SELECT ZMESSAGETYPE FROM ZWAMESSAGE WHERE Z_PK = ?`, res.PK).Scan(&msgType); err != nil || msgType != 11 {
 		t.Errorf("type = %d, %v", msgType, err)
 	}
-	if p := decide(video("V1", false), nil); p.Action != actionSkip {
-		t.Errorf("ordinary video: action = %v, want skip", p.Action)
+}
+
+func TestApplyVideo(t *testing.T) {
+	cases := []struct {
+		name       string
+		seconds    uint32
+		size       uint64
+		downloaded bool
+	}{
+		{"short", 60, 9_000_000, true},
+		{"at the limits", videoMaxSeconds, videoMaxBytes, true},
+		{"too long", videoMaxSeconds + 1, 9_000_000, false},
+		{"too big", 60, videoMaxBytes + 1, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			w, root := newTestWriter(t)
+			downloads := 0
+			w.download = func(context.Context, downloadable) ([]byte, error) {
+				downloads++
+				return []byte("mp4bytes"), nil
+			}
+			ev := dmEvent("V1", "")
+			ev.Message = &waE2E.Message{VideoMessage: &waE2E.VideoMessage{
+				DirectPath: proto.String("/v/clip"),
+				Caption:    proto.String("holiday"),
+				Seconds:    proto.Uint32(c.seconds),
+				FileLength: proto.Uint64(c.size),
+			}}
+			ctx := context.Background()
+			res, err := w.Apply(ctx, decide(ev, nil))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.Action != actionInsert {
+				t.Fatalf("res = %+v", res)
+			}
+			if got := downloads == 1; got != c.downloaded {
+				t.Errorf("downloads = %d", downloads)
+			}
+			wantRel := ""
+			if c.downloaded {
+				wantRel = filepath.Join(backup.UnenrichedDir, "media", "1.m4v")
+				if _, err := os.Stat(filepath.Join(root, wantRel)); err != nil {
+					t.Errorf("queued file: %v", err)
+				}
+			}
+			if res.MediaPath != wantRel {
+				t.Errorf("MediaPath = %q, want %q", res.MediaPath, wantRel)
+			}
+			var msgType int
+			var localPath, title string
+			if err := queryDB(t, w, `SELECT m.ZMESSAGETYPE, mi.ZMEDIALOCALPATH, mi.ZTITLE FROM ZWAMESSAGE m
+				JOIN ZWAMEDIAITEM mi ON mi.ZMESSAGE = m.Z_PK WHERE m.Z_PK = ?`, res.PK).Scan(&msgType, &localPath, &title); err != nil {
+				t.Fatal(err)
+			}
+			if msgType != 2 || !strings.HasSuffix(localPath, ".mp4") || title != "holiday" {
+				t.Errorf("type = %d, path = %q, title = %q", msgType, localPath, title)
+			}
+			if _, err := w.Apply(ctx, plan{Action: actionRevoke, TargetID: "V1"}); err != nil {
+				t.Errorf("revoke: %v", err)
+			}
+		})
 	}
 }
 
@@ -413,6 +474,7 @@ func TestMediaPathFor(t *testing.T) {
 		{9, 8, "Media/x/a/b/uuid.docx", filepath.Join(backup.UnenrichedDir, "documents", "9.docx")},
 		{12, 15, "Media/x/a/b/uuid.webp", filepath.Join(backup.UnenrichedDir, "media", "12.webp")},
 		{13, 11, "Media/x/a/b/uuid.mp4", filepath.Join(backup.UnenrichedDir, "media", "13.mp4")},
+		{14, 2, "Media/x/a/b/uuid.mp4", filepath.Join(backup.UnenrichedDir, "media", "14.m4v")},
 		{10, 0, "", ""},
 		{11, 14, "", ""},
 	}

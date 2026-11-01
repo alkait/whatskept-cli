@@ -71,6 +71,7 @@ func TestMergeForwardSkipsLivePKs(t *testing.T) {
 	live := filepath.Join(dir, "live.sqlite")
 	temp := filepath.Join(dir, "temp.sqlite")
 	writeDB(t, live, voiceTextDDL+`
+		CREATE TABLE ZWAMESSAGE (Z_PK INTEGER PRIMARY KEY, ZMESSAGETYPE INTEGER, ZSTANZAID TEXT);
 		CREATE TABLE wa_live_pk (pk INTEGER PRIMARY KEY);
 		INSERT INTO wa_live_pk VALUES (2);
 		INSERT INTO wa_voice_text VALUES (1, 'from backup', '', NULL, 'm', 't');
@@ -78,8 +79,8 @@ func TestMergeForwardSkipsLivePKs(t *testing.T) {
 	// The fresh import re-delivers the live-captured message — rowid 2
 	// exists but is a DIFFERENT message now.
 	writeDB(t, temp, `
-		CREATE TABLE ZWAMESSAGE (Z_PK INTEGER PRIMARY KEY);
-		INSERT INTO ZWAMESSAGE VALUES (1), (2);`)
+		CREATE TABLE ZWAMESSAGE (Z_PK INTEGER PRIMARY KEY, ZSTANZAID TEXT);
+		INSERT INTO ZWAMESSAGE VALUES (1, 'A'), (2, 'B');`)
 
 	if err := mergeForward(live, temp); err != nil {
 		t.Fatal(err)
@@ -100,6 +101,44 @@ func TestMergeForwardSkipsLivePKs(t *testing.T) {
 	}
 	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE name = 'wa_live_pk'`).Scan(&n); err != nil || n != 0 {
 		t.Errorf("wa_live_pk carried into staging DB (n=%d)", n)
+	}
+}
+
+func TestMergeForwardCarriesLiveVideoByStanza(t *testing.T) {
+	dir := t.TempDir()
+	live := filepath.Join(dir, "live.sqlite")
+	temp := filepath.Join(dir, "temp.sqlite")
+	writeDB(t, live, voiceTextDDL+`
+		CREATE TABLE ZWAMESSAGE (Z_PK INTEGER PRIMARY KEY, ZMESSAGETYPE INTEGER, ZSTANZAID TEXT);
+		CREATE TABLE wa_live_pk (pk INTEGER PRIMARY KEY);
+		INSERT INTO wa_live_pk VALUES (5), (6);
+		INSERT INTO ZWAMESSAGE VALUES (5, 2, 'VID'), (6, 1, 'IMG');
+		INSERT INTO wa_voice_text VALUES (5, 'video speech', '', NULL, 'm', 't');
+		INSERT INTO wa_voice_text VALUES (6, 'not a video', '', NULL, 'm', 't');`)
+	writeDB(t, temp, `
+		CREATE TABLE ZWAMESSAGE (Z_PK INTEGER PRIMARY KEY, ZSTANZAID TEXT);
+		INSERT INTO ZWAMESSAGE VALUES (5, 'OTHER'), (70, 'VID'), (71, 'IMG');`)
+
+	if err := mergeForward(live, temp); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := sql.Open("sqlite", temp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var rowid int
+	var transcript string
+	if err := db.QueryRow(`SELECT rowid, transcript FROM wa_voice_text`).Scan(&rowid, &transcript); err != nil {
+		t.Fatal(err)
+	}
+	if rowid != 70 || transcript != "video speech" {
+		t.Errorf("row = %d %q, want 70 %q", rowid, transcript, "video speech")
+	}
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM wa_voice_text`).Scan(&n); err != nil || n != 1 {
+		t.Errorf("voice rows = %d, %v", n, err)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/pdfcpu/pdfcpu/pkg/api"
@@ -53,6 +54,22 @@ const (
 		"DESCRIPTION: 1-2 factual sentences describing what happens in the clip, " +
 		"including the people and objects."
 
+	// videoPrompt adds speech, which gifPrompt must not ask for: a GIF is
+	// silent and the model invents words for it. Verbatim, because asked
+	// for a summary it answers in English and Arabic speech goes
+	// unsearchable.
+	videoPrompt = "You are indexing a personal chat archive. This is a video: watch and " +
+		"listen to all of it. Output EXACTLY three labeled sections and nothing else, " +
+		"with no introduction:\n\n" +
+		"TEXT: Transcribe every piece of on-screen text VERBATIM, in its original " +
+		"language and script. Preserve the order it appears. Do NOT translate or " +
+		"summarize. If there is no readable text, write 'none'.\n\n" +
+		"SPEECH: Transcribe the spoken words VERBATIM, in the language and script they " +
+		"are spoken in. Do NOT translate or summarize. Ignore singing and background " +
+		"music. If nobody speaks, write 'none'.\n\n" +
+		"DESCRIPTION: 1-2 factual sentences describing what happens, including the " +
+		"people and objects."
+
 	// voicePrompt asks for a verbatim, translation-free transcript in
 	// the original language (chats mix Arabic / English).
 	voicePrompt = "Transcribe this voice message verbatim. Output ONLY the " +
@@ -80,6 +97,7 @@ const (
 type imageResult struct {
 	OCRText     string
 	Description string
+	Speech      string // videos only
 }
 
 // describeImage runs one vision call and splits the reply into verbatim
@@ -91,9 +109,15 @@ func describeImage(ctx context.Context, c *Client, ext string, data []byte) (ima
 		{Type: "text", Text: imagePrompt},
 		{Type: "image_url", ImageURL: &imageURLPart{URL: dataURI}},
 	}
-	if ext == "mp4" {
+	switch ext {
+	case "mp4":
 		parts = []contentPart{
 			{Type: "text", Text: gifPrompt},
+			{Type: "video_url", VideoURL: &imageURLPart{URL: dataURI}},
+		}
+	case "m4v":
+		parts = []contentPart{
+			{Type: "text", Text: videoPrompt},
 			{Type: "video_url", VideoURL: &imageURLPart{URL: dataURI}},
 		}
 	}
@@ -109,7 +133,11 @@ func describeImage(ctx context.Context, c *Client, ext string, data []byte) (ima
 		return imageResult{}, cr.cost(), &Error{Class: ClassPermanent,
 			Msg: fmt.Sprintf("unusable image reply (finish_reason=%q, %d chars)", reason, len(cr.Choices[0].Message.Content))}
 	}
-	return imageResult{OCRText: ocr, Description: desc}, cr.cost(), nil
+	res := imageResult{OCRText: ocr, Description: desc}
+	if ext == "m4v" {
+		res.OCRText, res.Speech = splitSpeech(ocr)
+	}
+	return res, cr.cost(), nil
 }
 
 // transcribeVoice sends the raw Ogg/Opus bytes and returns the
@@ -250,15 +278,32 @@ func splitTextDescription(s string) (ocr, desc string) {
 	if di < 0 {
 		return "", s
 	}
-	head := strings.TrimSpace(s[:di])
+	head := s[:di]
 	desc = strings.TrimSpace(s[di+len("description:"):])
-	if strings.HasPrefix(strings.ToLower(head), "text:") {
-		head = strings.TrimSpace(head[len("text:"):])
+	// The label may follow an introduction the model added anyway.
+	if loc := textLabel.FindStringIndex(head); loc != nil {
+		head = head[loc[1]:]
 	}
-	if strings.EqualFold(head, "none") {
-		head = ""
+	return noneToEmpty(head), desc
+}
+
+var textLabel = regexp.MustCompile(`(?im)^text:`)
+
+// splitSpeech separates a video's SPEECH section from the TEXT before it.
+func splitSpeech(s string) (ocr, speech string) {
+	i := strings.Index(strings.ToLower(s), "speech:")
+	if i < 0 {
+		return s, ""
 	}
-	return head, desc
+	return noneToEmpty(s[:i]), noneToEmpty(s[i+len("speech:"):])
+}
+
+func noneToEmpty(s string) string {
+	s = strings.TrimSpace(s)
+	if strings.EqualFold(strings.TrimRight(s, "."), "none") {
+		return ""
+	}
+	return s
 }
 
 // cleanParsed strips the pdf-text "# file … ## Contents" header so we
@@ -339,7 +384,7 @@ func mimeForImageExt(ext string) string {
 		return "image/heic"
 	case "webp":
 		return "image/webp"
-	case "mp4":
+	case "mp4", "m4v":
 		return "video/mp4"
 	default:
 		return "image/jpeg"
