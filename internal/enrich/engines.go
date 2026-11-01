@@ -16,7 +16,7 @@ import (
 // Arabic/English WhatsApp archives).
 const (
 	// ImageModel is a cheap, strong multilingual-OCR vision model.
-	ImageModel = "qwen/qwen3-vl-8b-instruct"
+	ImageModel = "z-ai/glm-5.3-flash"
 	// VoiceModel must be an audio-input model.
 	VoiceModel = "google/gemini-2.5-flash"
 	// DocumentModel only acks — the text comes from the file-parser
