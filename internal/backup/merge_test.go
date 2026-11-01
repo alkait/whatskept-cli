@@ -161,3 +161,45 @@ func TestSelectBlobCandidatesSkipsEnriched(t *testing.T) {
 		}
 	}
 }
+
+const reactionDDL = `CREATE TABLE wa_reaction (target_stanza TEXT NOT NULL, sender_jid TEXT NOT NULL,
+	is_from_me INTEGER NOT NULL, emoji TEXT NOT NULL, ts TEXT NOT NULL,
+	PRIMARY KEY (target_stanza, sender_jid)) WITHOUT ROWID;`
+
+// The backup brings the reactions it knows from its own blobs; only
+// what live saw after the backup was taken comes across.
+func TestMergeForwardReactions(t *testing.T) {
+	dir := t.TempDir()
+	live := filepath.Join(dir, "live.sqlite")
+	temp := filepath.Join(dir, "temp.sqlite")
+	writeDB(t, live, reactionDDL+`
+		INSERT INTO wa_reaction VALUES
+			('old', 'a@lid', 0, '🙈', '2020-01-01 00:00:00'),
+			('m1',  'b@lid', 0, '🔥', '2030-01-01 00:00:00');`)
+	// 3A.. is field 7: one reaction by "a@lid" to the staged message m1,
+	// January 2025 — before the live one above, after the stale one.
+	writeDB(t, temp, `
+		CREATE TABLE ZWAMESSAGE (Z_PK INTEGER PRIMARY KEY, ZSTANZAID TEXT, ZMESSAGEDATE REAL);
+		CREATE TABLE ZWAMESSAGEINFO (Z_PK INTEGER PRIMARY KEY, ZMESSAGE INTEGER, ZRECEIPTINFO BLOB);
+		INSERT INTO ZWAMESSAGE VALUES (1, 'm1', 757382400);
+		INSERT INTO ZWAMESSAGEINFO (ZMESSAGE, ZRECEIPTINFO) VALUES
+			(1, x'3A160A140A0172120561406C69641A01212080F8A5F9C132');`)
+
+	if err := mergeForward(live, temp); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := sql.Open("sqlite", temp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var got string
+	if err := db.QueryRow(`SELECT group_concat(target_stanza || ':' || sender_jid || ':' || emoji, ' ')
+		FROM (SELECT * FROM wa_reaction ORDER BY sender_jid)`).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != "m1:a@lid:! m1:b@lid:🔥" {
+		t.Errorf("reactions = %q", got)
+	}
+}

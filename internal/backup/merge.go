@@ -5,6 +5,8 @@ import (
 	"fmt"
 
 	_ "modernc.org/sqlite"
+
+	"whatskept/internal/views"
 )
 
 // enrichmentTables maps each blob kind's enrichment-result table.
@@ -22,12 +24,21 @@ var enrichmentTables = map[string]string{
 // into the staging DB, keeping only rows whose message still exists
 // there (messages deleted on the device drop their enrichment too).
 // Tables the live DB doesn't have are skipped — nothing to carry.
+//
+// Reactions travel differently: the backup holds them too, so the
+// staging DB gets its own from the blobs, and only those newer than the
+// backup come across. They are keyed by stanza ID, so wa_live_pk doesn't
+// apply. A reaction withdrawn after the backup was taken does come back:
+// nothing records that it is gone.
 func mergeForward(livePath, tempPath string) error {
 	db, err := sql.Open("sqlite", tempPath)
 	if err != nil {
 		return err
 	}
 	defer db.Close()
+	if _, err := views.EnsureReactions(db); err != nil {
+		return fmt.Errorf("read reactions: %w", err)
+	}
 	if _, err := db.Exec(`ATTACH DATABASE ? AS old`, livePath); err != nil {
 		return fmt.Errorf("attach live db: %w", err)
 	}
@@ -69,6 +80,21 @@ func mergeForward(livePath, tempPath string) error {
 			`INSERT INTO main.%[1]s SELECT * FROM old.%[1]s
 			 WHERE rowid IN (SELECT Z_PK FROM main.ZWAMESSAGE)`+liveExclusion, table)); err != nil {
 			return fmt.Errorf("copy %s rows: %w", table, err)
+		}
+	}
+
+	var hasReactions int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM old.sqlite_master WHERE type = 'table' AND name = 'wa_reaction'`,
+	).Scan(&hasReactions); err != nil {
+		return fmt.Errorf("check wa_reaction: %w", err)
+	}
+	if hasReactions > 0 {
+		if _, err := db.Exec(`
+			INSERT OR REPLACE INTO main.wa_reaction SELECT * FROM old.wa_reaction
+			WHERE ts > (SELECT datetime(MAX(ZMESSAGEDATE) + 978307200, 'unixepoch')
+			            FROM main.ZWAMESSAGE)`); err != nil {
+			return fmt.Errorf("copy wa_reaction rows: %w", err)
 		}
 	}
 	return nil

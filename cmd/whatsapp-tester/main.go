@@ -38,6 +38,7 @@ Usage:
   whatsapp-tester send-text <jid> <text>        send a text message, print its stanza ID
   whatsapp-tester reply <jid> <target> <text>   reply to an earlier message
   whatsapp-tester edit <jid> <target> <text>    rewrite an earlier message's text
+  whatsapp-tester react <jid> <target> <emoji>  react to a message the tester sent; "" withdraws
   whatsapp-tester revoke <jid> <target>         delete an earlier message for everyone
   whatsapp-tester send-image <jid> <file> [caption]   send an image
   whatsapp-tester send-voice <jid> <file>       send a voice note (ogg opus)
@@ -82,6 +83,12 @@ func main() {
 			os.Exit(2)
 		}
 		err = runEdit(ctx, args[1], args[2], args[3])
+	case "react":
+		if len(args) != 4 {
+			fmt.Fprint(os.Stderr, "react requires <jid> <target> <emoji>\n\n"+usage)
+			os.Exit(2)
+		}
+		err = runReact(ctx, args[1], args[2], args[3])
 	case "revoke":
 		if len(args) != 3 {
 			fmt.Fprint(os.Stderr, "revoke requires <jid> <target>\n\n"+usage)
@@ -287,6 +294,25 @@ func runEdit(ctx context.Context, jid, targetID, text string) error {
 		return fmt.Errorf("send edit: %w", err)
 	}
 	fmt.Printf("edited id=%s target=%s\n", resp.ID, targetID)
+	return nil
+}
+
+func runReact(ctx context.Context, jid, targetID, emoji string) error {
+	to, err := types.ParseJID(jid)
+	if err != nil {
+		return fmt.Errorf("parse jid %q: %w", jid, err)
+	}
+	client, err := connect(ctx)
+	if err != nil {
+		return err
+	}
+	defer client.Disconnect()
+	// An empty sender means the target is the tester's own message.
+	resp, err := client.SendMessage(ctx, to, client.BuildReaction(to, types.EmptyJID, types.MessageID(targetID), emoji))
+	if err != nil {
+		return fmt.Errorf("send reaction: %w", err)
+	}
+	fmt.Printf("reacted id=%s target=%s emoji=%q\n", resp.ID, targetID, emoji)
 	return nil
 }
 

@@ -78,6 +78,11 @@ own SQL, LEFT JOIN the side tables the same way — but only the ones
   `ts` (UTC ISO, **already epoch-converted**), `is_from_me`,
   `sender_name`, `sender_jid`, `message_type_name`, `text`,
   `reply_to_id`, `link_url`, `link_title`.
+- `v_reactions` — one row per person per message: `emoji`, `ts`,
+  `is_from_me`, `sender_name`, `sender_jid`, and the message reacted to:
+  `rowid`, `stanza_id`, `chat_id`, `chat_title`, `message_ts`,
+  `message_sender`, `message_type_name`, `message_text`. `rowid` and the
+  message columns are NULL when the message isn't stored.
 - `messages_fts` — FTS5; `rowid` joins to `v_messages.rowid`.
   Diacritics folded. Syntax: `"exact phrase"`, `AND`, `OR`, `NOT`,
   `NEAR/3`, prefix `pizz*`.
@@ -122,6 +127,11 @@ resolution, and the LID↔phone bridge for you.
    walk it with a recursive CTE.
 7. **Citing**: cite `(rowid, ts, chat_title, sender_name)` for every
    claim so the user can verify.
+8. **Reactions are not messages.** They never appear in `v_messages`
+   or `messages_fts`, and emoji can't be searched with `search` or FTS.
+   For "who reacted", "what did people like", or a given emoji, query
+   `v_reactions`. `search` hits list a message's emoji in `reactions`.
+   A withdrawn reaction leaves no row.
 
 ## Transcript slices
 

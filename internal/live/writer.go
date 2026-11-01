@@ -42,6 +42,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"whatskept/internal/backup"
+	"whatskept/internal/views"
 )
 
 // cocoaEpoch is the Core Data reference date (2001-01-01) as a Unix
@@ -76,6 +77,7 @@ const (
 	actionInsert
 	actionEdit
 	actionRevoke
+	actionReaction
 )
 
 func (a action) String() string {
@@ -86,6 +88,8 @@ func (a action) String() string {
 		return "edit"
 	case actionRevoke:
 		return "revoke"
+	case actionReaction:
+		return "reaction"
 	default:
 		return "skip"
 	}
@@ -99,7 +103,7 @@ type plan struct {
 	SkipReason string
 
 	StanzaID string // this message
-	TargetID string // the message an edit/revoke refers to
+	TargetID string // the message an edit/revoke/reaction refers to
 
 	ChatJID   types.JID
 	SenderJID types.JID
@@ -109,7 +113,7 @@ type plan struct {
 	PushName  string
 	Timestamp time.Time
 
-	Text     string
+	Text     string // the body, or a reaction's emoji ("" withdraws it)
 	QuotedID string // stanza ID of a quoted message, for ZPARENTMESSAGE
 
 	// Media is set when the message carries an attachment to store. Its
@@ -201,6 +205,17 @@ func decide(evt *events.Message, secret *secretPayload) plan {
 	msg := evt.Message
 	if msg == nil {
 		p.Action, p.SkipReason = actionSkip, "no message"
+		return p
+	}
+
+	// Reactions come first: withdrawing one is flagged as a sender
+	// revoke, but its target is the message reacted to, which must not
+	// be tombstoned.
+	if r := msg.GetReactionMessage(); r != nil {
+		p.Action, p.Text, p.TargetID = actionReaction, r.GetText(), r.GetKey().GetID()
+		if p.TargetID == "" {
+			p.Action, p.SkipReason = actionSkip, "reaction without target"
+		}
 		return p
 	}
 
@@ -380,7 +395,8 @@ func openRW(path string) (*sql.DB, error) {
 }
 
 // EnsureReady proves the DB is a writable ChatStorage and creates the
-// wa_live_pk ledger. Called once at startup so failure is loud and
+// wa_live_pk ledger and the reaction table, which a workspace imported
+// by an older version doesn't have. Called once at startup so failure is loud and
 // immediate rather than appearing on the first message that matters.
 func (w *Writer) EnsureReady(ctx context.Context) error {
 	db, err := openRW(w.dbPath)
@@ -400,6 +416,13 @@ func (w *Writer) EnsureReady(ctx context.Context) error {
 	if _, err := db.ExecContext(ctx,
 		`CREATE TABLE IF NOT EXISTS wa_live_pk (pk INTEGER PRIMARY KEY)`); err != nil {
 		return fmt.Errorf("create wa_live_pk (is the database writable?): %w", err)
+	}
+	n, err = views.EnsureReactions(db)
+	if err != nil {
+		return fmt.Errorf("prepare reactions: %w", err)
+	}
+	if n > 0 {
+		logf("reactions: %d backfilled from the imported history", n)
 	}
 	return nil
 }
@@ -454,6 +477,8 @@ func (w *Writer) Apply(ctx context.Context, p plan) (Result, error) {
 		res, err = w.applyRevoke(ctx, tx, p)
 	case actionEdit:
 		res, err = applyEdit(ctx, tx, p)
+	case actionReaction:
+		res, err = applyReaction(ctx, tx, p)
 	default:
 		res, err = w.applyInsert(ctx, tx, p)
 	}
@@ -700,6 +725,41 @@ func applyEdit(ctx context.Context, tx *sql.Tx, p plan) (Result, error) {
 	return Result{Action: actionEdit, PK: pk}, nil
 }
 
+// applyReaction records, replaces or withdraws one person's reaction.
+// The target needn't be stored: reactions are keyed by stanza ID, so
+// one that arrives first simply attaches when its message does.
+//
+// The phone's blobs name a person by phone JID or LID, and live may see
+// the other one, so the row is replaced under either name. The user's
+// own reactions have no sender, matching the blobs.
+func applyReaction(ctx context.Context, tx *sql.Tx, p plan) (Result, error) {
+	sender, fromMe := p.SenderJID.String(), 0
+	if p.IsFromMe {
+		sender, fromMe = "", 1
+	}
+	// Without a second name, alt repeats the first: an empty string here
+	// would match the user's own row.
+	alt := p.SenderAlt.String()
+	if alt == "" {
+		alt = sender
+	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM wa_reaction WHERE target_stanza = ? AND sender_jid IN (?, ?)`,
+		p.TargetID, sender, alt); err != nil {
+		return Result{}, err
+	}
+	if p.Text != "" {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO wa_reaction (target_stanza, sender_jid, is_from_me, emoji, ts)
+			 VALUES (?, ?, ?, ?, ?)`,
+			p.TargetID, sender, fromMe, p.Text,
+			p.Timestamp.UTC().Format("2006-01-02 15:04:05")); err != nil {
+			return Result{}, err
+		}
+	}
+	return Result{Action: actionReaction}, nil
+}
+
 // applyRevoke marks a message deleted the same way the phone's own DB
 // does: ZMESSAGETYPE 14, which v_messages renders as 'deleted'.
 //
@@ -740,6 +800,10 @@ func (w *Writer) applyRevoke(ctx context.Context, tx *sql.Tx, p plan) (Result, e
 		}
 	}
 	if err := ftsReplace(ctx, tx, pk, ""); err != nil {
+		return Result{}, err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM wa_reaction WHERE target_stanza = ?`, p.TargetID); err != nil {
 		return Result{}, err
 	}
 

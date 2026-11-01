@@ -73,6 +73,7 @@ func Run(ctx context.Context, root string) error {
 		inserted  atomic.Int64
 		edited    atomic.Int64
 		revoked   atomic.Int64
+		reactions atomic.Int64
 		skipped   atomic.Int64
 		writeErrs atomic.Int64
 	)
@@ -161,6 +162,9 @@ func Run(ctx context.Context, root string) error {
 		case actionRevoke:
 			revoked.Add(1)
 			return fmt.Sprintf(" write=revoke pk=%d", res.PK), nil
+		case actionReaction:
+			reactions.Add(1)
+			return " write=reaction", nil
 		default:
 			skipped.Add(1)
 			return " write=skip(" + res.Reason + ")", nil
@@ -327,9 +331,9 @@ func Run(ctx context.Context, root string) error {
 				} else if since := connectedAt.Load(); since > 0 {
 					state = fmt.Sprintf("connected for %s", time.Since(time.Unix(since, 0)).Round(time.Second))
 				}
-				logf("heartbeat: %s | messages=%d connects=%d disconnects=%d | wrote=%d edits=%d revokes=%d skipped=%d errors=%d | queued=%d%s",
+				logf("heartbeat: %s | messages=%d connects=%d disconnects=%d | wrote=%d edits=%d revokes=%d reactions=%d skipped=%d errors=%d | queued=%d%s",
 					state, msgCount.Load(), connects.Load(), disconnects.Load(),
-					inserted.Load(), edited.Load(), revoked.Load(), skipped.Load(), writeErrs.Load(),
+					inserted.Load(), edited.Load(), revoked.Load(), reactions.Load(), skipped.Load(), writeErrs.Load(),
 					queueSize(root), enr.status())
 			}
 		}
@@ -467,7 +471,8 @@ func describeContent(v *events.Message) (kind string, detail string) {
 	case m.GetContactMessage() != nil:
 		return "contact", ""
 	case m.GetReactionMessage() != nil:
-		return "reaction", fmt.Sprintf(" emoji=%q", m.GetReactionMessage().GetText())
+		r := m.GetReactionMessage()
+		return "reaction", fmt.Sprintf(" emoji=%q target=%s", r.GetText(), r.GetKey().GetID())
 	case m.GetSecretEncryptedMessage() != nil:
 		return "secret:" + m.GetSecretEncryptedMessage().GetSecretEncType().String(), ""
 	case m.GetProtocolMessage() != nil:

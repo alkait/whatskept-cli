@@ -393,6 +393,8 @@ type searchHit struct {
 	Type    string `json:"type" jsonschema:"message type: text, image, audio, document, link, ..."`
 	Text    string `json:"text" jsonschema:"the matched surface: typed text, image description/OCR, voice transcript, document text, or filename"`
 	Snippet string `json:"snippet" jsonschema:"FTS snippet with [[ ]] around matched terms"`
+
+	Reactions string `json:"reactions,omitempty" jsonschema:"emoji reactions to this message, space-separated; v_reactions says who"`
 }
 
 type searchOut struct {
@@ -410,7 +412,7 @@ func (s *server) search(ctx context.Context, _ *mcp.CallToolRequest, in searchIn
 	defer cancel()
 
 	has, err := existingTables(ctx, db, []string{
-		"messages_fts", "v_messages", "wa_image_text", "wa_voice_text", "wa_document", "wa_document_text",
+		"messages_fts", "v_messages", "wa_image_text", "wa_voice_text", "wa_document", "wa_document_text", "wa_reaction",
 	})
 	if err != nil {
 		return nil, searchOut{}, err
@@ -449,16 +451,24 @@ func (s *server) search(ctx context.Context, _ *mcp.CallToolRequest, in searchIn
 	}
 	sel = append(sel, "m.link_title", "''")
 
+	// A database no live or import has touched since reactions landed
+	// has no table yet.
+	reactions := "NULL"
+	if has["wa_reaction"] {
+		reactions = "(SELECT group_concat(r.emoji, ' ') FROM wa_reaction r WHERE r.target_stanza = m.stanza_id)"
+	}
+
 	q := fmt.Sprintf(`
 		SELECT m.rowid, m.ts, m.chat_title, m.sender_name, m.message_type_name,
 		       COALESCE(%s) AS hit_text,
-		       snippet(messages_fts, 0, '[[', ']]', '…', 12) AS hit_snippet
+		       snippet(messages_fts, 0, '[[', ']]', '…', 12) AS hit_snippet,
+		       %s AS reactions
 		FROM   messages_fts f
 		JOIN   v_messages m ON m.rowid = f.rowid
 		%s
 		WHERE  messages_fts MATCH ?
 		ORDER  BY m.ts DESC
-		LIMIT  ?`, strings.Join(sel, ",\n"), strings.Join(joins, "\n"))
+		LIMIT  ?`, strings.Join(sel, ",\n"), reactions, strings.Join(joins, "\n"))
 
 	rows, err := db.QueryContext(ctx, q, in.Query, limit)
 	if err != nil {
@@ -469,13 +479,14 @@ func (s *server) search(ctx context.Context, _ *mcp.CallToolRequest, in searchIn
 	out := searchOut{Hits: []searchHit{}}
 	for rows.Next() {
 		var h searchHit
-		var ts, chat, sender, typ, text, snip sql.NullString
-		if err := rows.Scan(&h.Rowid, &ts, &chat, &sender, &typ, &text, &snip); err != nil {
+		var ts, chat, sender, typ, text, snip, react sql.NullString
+		if err := rows.Scan(&h.Rowid, &ts, &chat, &sender, &typ, &text, &snip, &react); err != nil {
 			return nil, searchOut{}, err
 		}
 		h.Ts, h.Chat, h.Sender, h.Type = ts.String, chat.String, sender.String, typ.String
 		h.Text, _ = clipString(text.String)
 		h.Snippet = snip.String
+		h.Reactions = react.String
 		out.Hits = append(out.Hits, h)
 	}
 	return nil, out, rows.Err()

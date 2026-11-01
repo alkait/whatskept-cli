@@ -59,7 +59,7 @@ go run ./cmd/whatsapp-tester pair
 ```
 
 Run the suite, with `whatskept live` running in the workspace
-(capture scenarios: texts, edits, revokes, replies, media):
+(capture scenarios: texts, edits, revokes, replies, reactions, media):
 
 ```
 go test -tags e2e ./e2e-test -workspace <dir>

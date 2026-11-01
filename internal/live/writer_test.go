@@ -347,3 +347,175 @@ func TestMediaPathFor(t *testing.T) {
 		}
 	}
 }
+
+func reactionEvent(stanza, target, emoji string) *events.Message {
+	v := dmEvent(stanza, "")
+	v.Message = &waE2E.Message{ReactionMessage: &waE2E.ReactionMessage{
+		Key:  &waCommon.MessageKey{ID: proto.String(target)},
+		Text: proto.String(emoji),
+	}}
+	return v
+}
+
+func reactionRows(t *testing.T, w *Writer) string {
+	t.Helper()
+	var got sql.NullString
+	if err := queryDB(t, w, `SELECT group_concat(sender_jid || '=' || emoji || '/' || is_from_me, ' ')
+		FROM (SELECT * FROM wa_reaction ORDER BY sender_jid)`).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	return got.String
+}
+
+func TestDecideReaction(t *testing.T) {
+	p := decide(reactionEvent("r1", "m1", "❤️"), nil)
+	if p.Action != actionReaction || p.TargetID != "m1" || p.Text != "❤️" {
+		t.Errorf("plan = %+v", p)
+	}
+	// Withdrawing is flagged as a sender revoke; it must not become one.
+	v := reactionEvent("r2", "m1", "")
+	v.Info.Edit = types.EditAttributeSenderRevoke
+	if p := decide(v, nil); p.Action != actionReaction || p.TargetID != "m1" || p.Text != "" {
+		t.Errorf("withdrawal plan = %+v", p)
+	}
+	if p := decide(reactionEvent("r3", "", "❤️"), nil); p.Action != actionSkip {
+		t.Errorf("targetless plan = %+v", p)
+	}
+}
+
+func TestReactionLifecycle(t *testing.T) {
+	w, _ := newTestWriter(t)
+	ctx := context.Background()
+	apply := func(v *events.Message) {
+		t.Helper()
+		res, err := w.Apply(ctx, decide(v, nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Action != actionReaction {
+			t.Fatalf("result = %+v", res)
+		}
+	}
+	if _, err := w.Apply(ctx, decide(dmEvent("m1", "hello"), nil)); err != nil {
+		t.Fatal(err)
+	}
+	const sam = "971500000001@s.whatsapp.net"
+
+	apply(reactionEvent("r1", "m1", "❤️"))
+	if got := reactionRows(t, w); got != sam+"=❤️/0" {
+		t.Fatalf("after react: %q", got)
+	}
+	apply(reactionEvent("r2", "m1", "😂")) // a new emoji replaces
+	if got := reactionRows(t, w); got != sam+"=😂/0" {
+		t.Fatalf("after change: %q", got)
+	}
+
+	// Mine sits beside theirs, with no sender, as in the phone's blobs.
+	v := reactionEvent("r3", "m1", "👍")
+	v.Info.IsFromMe = true
+	apply(v)
+	if got := reactionRows(t, w); got != "=👍/1 "+sam+"=😂/0" {
+		t.Fatalf("after mine: %q", got)
+	}
+
+	gone := reactionEvent("r4", "m1", "")
+	gone.Info.Edit = types.EditAttributeSenderRevoke
+	apply(gone)
+	if got := reactionRows(t, w); got != "=👍/1" {
+		t.Fatalf("after withdrawal: %q", got)
+	}
+	// The message reacted to is untouched by all of it.
+	var msgType int
+	var text string
+	if err := queryDB(t, w, `SELECT ZMESSAGETYPE, ZTEXT FROM ZWAMESSAGE WHERE ZSTANZAID = 'm1'`).Scan(&msgType, &text); err != nil {
+		t.Fatal(err)
+	}
+	if msgType != 0 || text != "hello" {
+		t.Errorf("message after withdrawal: type %d text %q", msgType, text)
+	}
+}
+
+// The phone may have filed a reaction under the phone JID while live
+// sees the LID: changing it must replace that row, not add a second.
+func TestReactionReplacesAcrossLIDAndPhone(t *testing.T) {
+	w, _ := newTestWriter(t)
+	db, err := openRW(w.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`INSERT INTO wa_reaction VALUES ('m1', '971500000001@s.whatsapp.net', 0, '❤️', '2026-01-01 00:00:00')`); err != nil {
+		t.Fatal(err)
+	}
+	v := reactionEvent("r1", "m1", "😂")
+	v.Info.Sender = types.NewJID("12345", types.HiddenUserServer)
+	v.Info.SenderAlt = types.NewJID("971500000001", types.DefaultUserServer)
+	if _, err := w.Apply(context.Background(), decide(v, nil)); err != nil {
+		t.Fatal(err)
+	}
+	if got := reactionRows(t, w); got != "12345@lid=😂/0" {
+		t.Errorf("rows = %q", got)
+	}
+}
+
+func TestReactionBeforeItsMessage(t *testing.T) {
+	w, _ := newTestWriter(t)
+	if _, err := w.Apply(context.Background(), decide(reactionEvent("r1", "not-yet", "❤️"), nil)); err != nil {
+		t.Fatal(err)
+	}
+	if got := reactionRows(t, w); got == "" {
+		t.Error("reaction dropped because its message isn't stored yet")
+	}
+}
+
+func TestRevokeClearsReactions(t *testing.T) {
+	w, _ := newTestWriter(t)
+	ctx := context.Background()
+	for _, v := range []*events.Message{dmEvent("m1", "hello"), reactionEvent("r1", "m1", "❤️")} {
+		if _, err := w.Apply(ctx, decide(v, nil)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := w.Apply(ctx, plan{Action: actionRevoke, TargetID: "m1"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := reactionRows(t, w); got != "" {
+		t.Errorf("reactions on a deleted message: %q", got)
+	}
+}
+
+// A workspace imported before reactions existed gets its history on the
+// next live start, once.
+func TestEnsureReadyBackfillsReactionsOnce(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, backup.ChatStorageName)
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(chatStorageDDL + `
+		CREATE TABLE ZWAMESSAGEINFO (Z_PK INTEGER PRIMARY KEY, ZMESSAGE INTEGER, ZRECEIPTINFO BLOB);
+		INSERT INTO ZWAMESSAGE (Z_PK, ZSTANZAID) VALUES (1, 'm1');
+		INSERT INTO ZWAMESSAGEINFO (ZMESSAGE, ZRECEIPTINFO) VALUES
+			(1, x'3A1512130A0272311204F09F918D18F4C5FECAAD322001');`); err != nil {
+		t.Fatal(err)
+	}
+	w := &Writer{dbPath: dbPath, root: root}
+	if err := w.EnsureReady(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM wa_reaction`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("backfilled = %d, %v", n, err)
+	}
+	if _, err := db.Exec(`DELETE FROM wa_reaction`); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.EnsureReady(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM wa_reaction`).Scan(&n); err != nil || n != 0 {
+		t.Errorf("rows after second start = %d, %v", n, err)
+	}
+}

@@ -1,7 +1,7 @@
 // Package views turns a freshly extracted ChatStorage.sqlite into the
 // query surface the MCP server expects: the SQL view layer (wa_contact,
-// wa_jid_alias, wa_document, v_chats, v_messages) plus the messages_fts
-// FTS5 index.
+// wa_jid_alias, wa_document, v_chats, v_messages, wa_reaction,
+// v_reactions) plus the messages_fts FTS5 index.
 package views
 
 import (
@@ -27,6 +27,9 @@ func Apply(dbPath string) (int, error) {
 	defer db.Close()
 	if _, err := db.Exec(viewsSQL); err != nil {
 		return 0, fmt.Errorf("apply views: %w", err)
+	}
+	if _, err := EnsureReactions(db); err != nil {
+		return 0, fmt.Errorf("apply reactions: %w", err)
 	}
 	n, err := rebuildFTS(db)
 	if err != nil {

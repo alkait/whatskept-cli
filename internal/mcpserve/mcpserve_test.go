@@ -62,6 +62,63 @@ func writeFixtureDB(t *testing.T) string {
 	return path
 }
 
+func TestReactions(t *testing.T) {
+	path := writeFixtureDB(t)
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`INSERT INTO wa_reaction VALUES
+		('s1', '', 1, '❤️', '2026-01-01 10:00:00'),
+		('s1', '971501111111@s.whatsapp.net', 0, '😂', '2026-01-01 10:01:00')`); err != nil {
+		t.Fatal(err)
+	}
+	sess := connect(t, path)
+
+	var hits searchOut
+	call(t, sess, "search", map[string]any{"query": "cafe"}, &hits)
+	if len(hits.Hits) != 1 || !strings.Contains(hits.Hits[0].Reactions, "❤️") || !strings.Contains(hits.Hits[0].Reactions, "😂") {
+		t.Errorf("search hits = %+v", hits.Hits)
+	}
+	hits = searchOut{}
+	call(t, sess, "search", map[string]any{"query": "passport"}, &hits)
+	if len(hits.Hits) != 1 || hits.Hits[0].Reactions != "" {
+		t.Errorf("unreacted hit = %+v", hits.Hits)
+	}
+
+	var out queryOut
+	call(t, sess, "query", map[string]any{"sql": `SELECT sender_name, emoji, rowid, chat_title
+		FROM v_reactions ORDER BY ts`}, &out)
+	if len(out.Rows) != 2 || out.Rows[0][0] != "me" || out.Rows[1][0] != "Sarah" || out.Rows[1][1] != "😂" {
+		t.Errorf("v_reactions = %+v", out.Rows)
+	}
+
+	var schema schemaOut
+	call(t, sess, "get_schema", map[string]any{}, &schema)
+	if !strings.Contains(schema.Schema, "v_reactions") {
+		t.Error("get_schema doesn't show v_reactions")
+	}
+}
+
+// An older database has no wa_reaction; search still has to work.
+func TestSearchWithoutReactionTable(t *testing.T) {
+	path := writeFixtureDB(t)
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`DROP VIEW v_reactions; DROP TABLE wa_reaction`); err != nil {
+		t.Fatal(err)
+	}
+	var out searchOut
+	call(t, connect(t, path), "search", map[string]any{"query": "cafe"}, &out)
+	if len(out.Hits) != 1 {
+		t.Errorf("hits = %+v", out.Hits)
+	}
+}
+
 // connect runs the server over an in-memory transport and returns a
 // connected client session.
 func connect(t *testing.T, dbPath string) *mcp.ClientSession {

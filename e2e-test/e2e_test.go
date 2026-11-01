@@ -234,6 +234,43 @@ func TestRevokeCaptured(t *testing.T) {
 	}
 }
 
+// TestReactionCaptured: react, change it, withdraw it. Each step shows
+// in v_reactions, and the message itself is never touched — withdrawing
+// arrives flagged as a revoke.
+func TestReactionCaptured(t *testing.T) {
+	cfg := loadConfig(t)
+	stanza, text := sendText(t, cfg, "react-to-me")
+	db := openWorkspaceDB(t, cfg)
+	pk := waitForRow(t, db, stanza)
+
+	emoji := func() string {
+		var e string
+		err := db.QueryRow(`SELECT emoji FROM v_reactions WHERE stanza_id = ? AND rowid = ?`, stanza, pk).Scan(&e)
+		if err != nil && err != sql.ErrNoRows {
+			t.Fatal(err)
+		}
+		return e
+	}
+
+	tester(t, "react", cfg.Chat, stanza, "❤️")
+	waitFor(t, "reaction captured", func() bool { return emoji() == "❤️" })
+
+	tester(t, "react", cfg.Chat, stanza, "😂")
+	waitFor(t, "reaction changed", func() bool { return emoji() == "😂" })
+
+	tester(t, "react", cfg.Chat, stanza, "")
+	waitFor(t, "reaction withdrawn", func() bool { return emoji() == "" })
+
+	var msgType int
+	var got string
+	if err := db.QueryRow(`SELECT ZMESSAGETYPE, ZTEXT FROM ZWAMESSAGE WHERE Z_PK = ?`, pk).Scan(&msgType, &got); err != nil {
+		t.Fatal(err)
+	}
+	if msgType != 0 || got != text {
+		t.Errorf("message after withdrawal: type %d text %q", msgType, got)
+	}
+}
+
 // sendMedia sends a fixture via the given tester subcommand and
 // returns the stanza ID.
 func sendMedia(t *testing.T, cfg config, subcmd, fixture string, extra ...string) string {
