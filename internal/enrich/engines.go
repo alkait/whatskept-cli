@@ -16,7 +16,7 @@ import (
 // Arabic/English WhatsApp archives).
 const (
 	// ImageModel is a cheap, strong multilingual-OCR vision model.
-	ImageModel = "z-ai/glm-5.3-flash"
+	ImageModel = "qwen/qwen3-vl-30b-a3b-instruct"
 	// VoiceModel must be an audio-input model.
 	VoiceModel = "google/gemini-2.5-flash"
 	// DocumentModel only acks — the text comes from the file-parser
@@ -25,9 +25,8 @@ const (
 )
 
 const (
-	// imageMaxOutputTokens leaves room for the model's mandatory
-	// reasoning, which is billed against the same limit as the reply.
-	imageMaxOutputTokens = 2000
+	// imageMaxOutputTokens fits a densely printed label's full OCR.
+	imageMaxOutputTokens = 4000
 	voiceMaxOutputTokens = 8192 // a 10-minute voice note transcribes to thousands of tokens
 	docMaxOutputTokens   = 8    // the reply is a no-op ack; text arrives via annotations
 
