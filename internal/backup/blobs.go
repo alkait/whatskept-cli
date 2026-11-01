@@ -83,7 +83,7 @@ func (b *bundle) ExtractBlobs(root string, log func(string)) (BlobStats, error) 
 		}
 		return selectBlobCandidates(db, where+excl)
 	}
-	images, err := selectPending("images", "m.ZMEDIALOCALPATH LIKE '%.jpg'")
+	images, err := selectPending("images", imageSelection)
 	if err != nil {
 		return stats, err
 	}
@@ -128,6 +128,11 @@ func (b *bundle) ExtractBlobs(root string, log func(string)) (BlobStats, error) 
 
 	return stats, nil
 }
+
+// imageSelection picks photos and stickers. Live's descriptions don't
+// survive a re-import, so stickers must be extracted here to get theirs
+// back.
+const imageSelection = "(m.ZMEDIALOCALPATH LIKE '%.jpg' OR m.ZMEDIALOCALPATH LIKE '%.webp')"
 
 // selectBlobCandidates returns the media rows matching where, ordered
 // by message rowid. `m` is ZWAMEDIAITEM, `wm` its ZWAMESSAGE.
@@ -253,6 +258,8 @@ func detectImageFormat(data []byte) (string, bool) {
 		return "heic", true
 	case len(data) >= 4 && string(data[:4]) == "GIF8":
 		return "gif", true
+	case len(data) >= 12 && string(data[:4]) == "RIFF" && string(data[8:12]) == "WEBP":
+		return "webp", true
 	}
 	return "", false
 }

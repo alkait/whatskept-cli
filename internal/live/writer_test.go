@@ -305,6 +305,46 @@ func TestApplyMediaInsertAndRevoke(t *testing.T) {
 	}
 }
 
+func TestApplyStickerQueuedAsImage(t *testing.T) {
+	w, root := newTestWriter(t)
+	w.download = func(context.Context, downloadable) ([]byte, error) {
+		return []byte("webpbytes"), nil
+	}
+	ev := dmEvent("S1", "")
+	ev.Message = &waE2E.Message{StickerMessage: &waE2E.StickerMessage{
+		DirectPath:  proto.String("/v/sticker"),
+		Mimetype:    proto.String("image/webp"),
+		ContextInfo: &waE2E.ContextInfo{StanzaID: proto.String("QUOTED")},
+	}}
+	p := decide(ev, nil)
+	if p.Media == nil || p.QuotedID != "QUOTED" {
+		t.Fatalf("plan = %+v", p)
+	}
+	res, err := w.Apply(context.Background(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Action != actionInsert {
+		t.Fatalf("res = %+v", res)
+	}
+	wantRel := filepath.Join(backup.UnenrichedDir, "media", "1.webp")
+	if res.MediaPath != wantRel {
+		t.Errorf("MediaPath = %q, want %q", res.MediaPath, wantRel)
+	}
+	if _, err := os.Stat(filepath.Join(root, wantRel)); err != nil {
+		t.Errorf("queued file: %v", err)
+	}
+	var msgType int
+	var localPath string
+	if err := queryDB(t, w, `SELECT m.ZMESSAGETYPE, mi.ZMEDIALOCALPATH FROM ZWAMESSAGE m
+		JOIN ZWAMEDIAITEM mi ON mi.ZMESSAGE = m.Z_PK WHERE m.Z_PK = ?`, res.PK).Scan(&msgType, &localPath); err != nil {
+		t.Fatal(err)
+	}
+	if msgType != 15 || !strings.HasSuffix(localPath, ".webp") {
+		t.Errorf("type = %d, path = %q", msgType, localPath)
+	}
+}
+
 func TestApplyMediaDownloadFailureSkips(t *testing.T) {
 	w, root := newTestWriter(t)
 	w.download = func(context.Context, downloadable) ([]byte, error) {
@@ -338,6 +378,7 @@ func TestMediaPathFor(t *testing.T) {
 		{7, 1, "Media/x/a/b/uuid.jpg", filepath.Join(backup.UnenrichedDir, "media", "7.jpg")},
 		{8, 3, "Media/x/a/b/uuid.opus", filepath.Join(backup.UnenrichedDir, "voice", "8.opus")},
 		{9, 8, "Media/x/a/b/uuid.docx", filepath.Join(backup.UnenrichedDir, "documents", "9.docx")},
+		{12, 15, "Media/x/a/b/uuid.webp", filepath.Join(backup.UnenrichedDir, "media", "12.webp")},
 		{10, 0, "", ""},
 		{11, 14, "", ""},
 	}

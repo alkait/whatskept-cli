@@ -267,6 +267,29 @@ func TestRunUnusableImageReplyKeepsFile(t *testing.T) {
 	}
 }
 
+func TestRunEnrichesSticker(t *testing.T) {
+	root := writeWorkspace(t, 1)
+	writeQueued(t, root, "media", "1.webp")
+	var calls atomic.Int64
+	var sawWebP atomic.Bool
+	c, _ := newTestClient(t, 200, func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		body, _ := io.ReadAll(r.Body)
+		sawWebP.Store(bytes.Contains(body, []byte("data:image/webp;base64,")))
+		chatOK(w, "TEXT: none\n\nDESCRIPTION: a crying cartoon cat")
+	})
+	if _, err := run(t, root, c, 1, false); err != nil {
+		t.Fatal(err)
+	}
+	if !sawWebP.Load() {
+		t.Error("sticker not sent as image/webp")
+	}
+	got := query1(t, filepath.Join(root, "ChatStorage.sqlite"), `SELECT description FROM wa_image_text WHERE rowid = 1`)
+	if got != "a crying cartoon cat" {
+		t.Errorf("description = %q", got)
+	}
+}
+
 func TestRunTransientStaysQueued(t *testing.T) {
 	root := writeWorkspace(t, 1)
 	path := writeQueued(t, root, "voice", "1.opus")

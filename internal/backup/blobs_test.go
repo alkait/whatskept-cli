@@ -17,6 +17,7 @@ func TestDetectImageFormat(t *testing.T) {
 		{"png", []byte("\x89PNG\r\n\x1a\nrest"), "png", true},
 		{"heic", []byte("\x00\x00\x00\x18ftypheic"), "heic", true},
 		{"gif", []byte("GIF89a"), "gif", true},
+		{"webp", []byte("RIFF\x10\x00\x00\x00WEBPVP8 "), "webp", true},
 		{"garbage", []byte("not an image"), "", false},
 		{"empty", nil, "", false},
 	}
@@ -25,6 +26,24 @@ func TestDetectImageFormat(t *testing.T) {
 		if ext != c.ext || ok != c.ok {
 			t.Errorf("%s: got (%q, %v), want (%q, %v)", c.name, ext, ok, c.ext, c.ok)
 		}
+	}
+}
+
+func TestImageSelectionIncludesStickers(t *testing.T) {
+	db := writeFixtureChatDB(t, t.TempDir())
+	defer db.Close()
+	if _, err := db.Exec(`INSERT INTO ZWAMESSAGE (Z_PK) VALUES (900)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO ZWAMEDIAITEM (ZMESSAGE, ZMEDIALOCALPATH) VALUES (900, 'Media/x/a/b/s.webp')`); err != nil {
+		t.Fatal(err)
+	}
+	cands, err := selectBlobCandidates(db, imageSelection+" AND wm.Z_PK = 900")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cands) != 1 {
+		t.Errorf("candidates = %v, want the sticker", cands)
 	}
 }
 

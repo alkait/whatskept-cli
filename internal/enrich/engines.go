@@ -318,6 +318,8 @@ func mimeForImageExt(ext string) string {
 		return "image/gif"
 	case "heic":
 		return "image/heic"
+	case "webp":
+		return "image/webp"
 	default:
 		return "image/jpeg"
 	}
