@@ -656,3 +656,40 @@ func TestEnsureReadyBackfillsReactionsOnce(t *testing.T) {
 		t.Errorf("rows after second start = %d, %v", n, err)
 	}
 }
+
+// A workspace that never imported starts from backup.CreateEmpty: the
+// writer appends to it and the message is visible through the views.
+func TestApplyOnEmptyDatabase(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, backup.ChatStorageName)
+	if err := backup.CreateEmpty(dbPath); err != nil {
+		t.Fatal(err)
+	}
+	w := &Writer{dbPath: dbPath, root: root}
+	if err := w.EnsureReady(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	res, err := w.Apply(context.Background(), decide(dmEvent("S1", "first ever"), nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Action != actionInsert || res.PK != 1 || !res.NewChat {
+		t.Fatalf("res = %+v", res)
+	}
+	var text, chat string
+	if err := queryDB(t, w, `SELECT m.text, c.title FROM v_messages m JOIN v_chats c ON c.chat_id = m.chat_id
+		WHERE m.rowid = ?`, res.PK).Scan(&text, &chat); err != nil {
+		t.Fatal(err)
+	}
+	if text != "first ever" || chat != "Sam" {
+		t.Errorf("v_messages: text=%q chat=%q", text, chat)
+	}
+	var max int
+	if err := queryDB(t, w, `SELECT Z_MAX FROM Z_PRIMARYKEY WHERE Z_NAME = 'WAMessage'`).Scan(&max); err != nil || max != 1 {
+		t.Errorf("WAMessage Z_MAX = %d, %v", max, err)
+	}
+	var n int
+	if err := queryDB(t, w, `SELECT COUNT(*) FROM messages_fts WHERE messages_fts MATCH 'first'`).Scan(&n); err != nil || n != 1 {
+		t.Errorf("fts matches = %d, %v", n, err)
+	}
+}

@@ -78,14 +78,16 @@ anything checkable before stating it to the user.
 {
   "created_at": "…",
   "udid": "00008120-…",              // absent until first import
-  "whatsapp_number": "+9715…"        // absent until first import
+  "whatsapp_number": "+9715…"        // absent until first import or live link
 }
 ```
 
 `udid` + `whatsapp_number` **bind** the workspace to one device and one
 WhatsApp account. Both start absent. The first import stamps the
 device's UDID before decryption and the account number after; from then
-on, a backup from a different device or account is refused. That guard
+on, a backup from a different device or account is refused. A workspace
+that skipped the backup gets its number from the first `live` link and
+its UDID from the first import, if one ever happens. That guard
 protects the data — never work around it. If the user genuinely wants
 to switch device/account, the escape hatch is a fresh workspace (or
 they can hand-edit settings.json themselves; don't do it for them
@@ -150,11 +152,19 @@ the user two ways to fill it:
 
 Then look at `settings.json` and the files, and pick the path:
 
-1. **Clean slate** — no `udid`, no `ChatStorage.sqlite` → offer to
-   import an encrypted iOS backup (below).
-2. **Bound, but no `ChatStorage.sqlite`** — a previous import bound the
-   workspace but extraction didn't finish → suggest re-importing, from
-   the bound device only.
+1. **Clean slate** — no `udid`, no `ChatStorage.sqlite` → offer the
+   choice:
+   - **Import an encrypted iOS backup** (below) — the full history,
+     years of it, then live keeps it current.
+   - **Skip the backup and go straight to live** (see "Capturing
+     live") — `live` creates an empty database and history starts
+     from the moment it links; nothing older is captured. Right when
+     there is no iPhone backup to hand (Android, no Mac/PC, no time).
+     An import from the same account can still be added later; it
+     replaces the live-only history, which the backup contains too.
+2. **`udid` bound, but no `ChatStorage.sqlite`** — a previous import
+   bound the workspace but extraction didn't finish → suggest
+   re-importing, from the bound device only.
 3. **`ChatStorage.sqlite` present, files in `.unenriched/`** — imported
    but not fully enriched → check `enrich.log` for what earlier runs
    did (hard failures? transient outage? never run at all?), then offer
@@ -294,6 +304,8 @@ phone of the SAME account this workspace is bound to (any other
 account is refused). The session persists in `.whatskept/session.db`;
 later runs reconnect without a QR. Run it in the background: it logs
 every message it writes and a 15-minute heartbeat with queue counts.
+In a workspace with no `ChatStorage.sqlite` yet, live creates an empty
+one and says so; nothing from before the link is captured.
 
 Before starting live — here or on a host — ask the user which mode
 they want; don't silently default to either:

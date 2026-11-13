@@ -78,12 +78,17 @@ func Run(ctx context.Context, root string) error {
 		writeErrs atomic.Int64
 	)
 
-	// The writer needs an imported database to append to — import seeds
-	// it, live appends to it. Checked before pairing so a mis-ordered
-	// first run fails in one obvious line.
+	// Import usually seeds the database; a workspace going straight to
+	// live without a backup starts from an empty one instead. A later
+	// import replaces it with the phone's full history as usual.
 	dbPath := filepath.Join(root, backup.ChatStorageName)
-	if _, err := os.Stat(dbPath); err != nil {
-		return fmt.Errorf("no %s in this workspace — run `whatskept import` first (import seeds the database, live appends to it)", backup.ChatStorageName)
+	if _, err := os.Stat(dbPath); errors.Is(err, os.ErrNotExist) {
+		if err := backup.CreateEmpty(dbPath); err != nil {
+			return err
+		}
+		logf("no %s — created an empty one; history starts now (`whatskept import` any time adds the older messages)", backup.ChatStorageName)
+	} else if err != nil {
+		return err
 	}
 	w := &Writer{
 		dbPath: dbPath,
